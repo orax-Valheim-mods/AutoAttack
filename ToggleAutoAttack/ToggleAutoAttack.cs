@@ -373,6 +373,10 @@ namespace ToggleAutoAttack
     /// paused, so the game behaves exactly as if the player were physically holding the attack
     /// button - nothing else needs to change.
     ///
+    /// Bow weapons are the exception, needing the hold briefly simulated as released in two
+    /// cases (see the helpers below): once the draw is full (to fire the arrow), and while the
+    /// draw state is stuck at -1 (to let it recover after the activation combo's Block press).
+    ///
     /// Scope: only ZInput.GetButton (the held/continuous query) is patched, and only for the
     /// exact button name "Attack". GetButtonDown/GetButtonUp - used by DynamicButtonConfig.AnyDown
     /// for cancellation - read a completely separate, independently-tracked state
@@ -387,10 +391,89 @@ namespace ToggleAutoAttack
             if (__result || !AutoAttackState.Active || AutoAttackState.Paused)
                 return; // already true, toggle inactive, or currently paused: nothing to do
 
-            if (name == "Attack")
-            {
-                __result = true;
-            }
+            if (name != "Attack")
+                return;
+
+            // Bow stuck at draw time -1: see BowDrawStuck.
+            if (BowDrawStuck())
+                return; // one read without hold lets UpdateAttackBowDraw heal -1 -> 0
+
+            // Bow micro-release: see BowFullyDrawn.
+            if (BowFullyDrawn())
+                return; // leave __result false: simulate the release edge for exactly one read
+
+            __result = true;
+        }
+
+        private static readonly FieldRef<Humanoid, float> AttackDrawTimeRef =
+            FieldRefAccess<Humanoid, float>("m_attackDrawTime");
+
+        /// <summary>
+        /// True when a bow's draw state is stuck at -1 and needs one tick without the fake hold
+        /// to recover.
+        ///
+        /// Why it gets stuck: UpdateAttackBowDraw sets m_attackDrawTime = -1 whenever the player
+        /// is blocking, in a minor action, or attached (and when StartDraw fails, e.g. no ammo),
+        /// and its first branch only heals that back to 0 on a tick where m_attackHold is
+        /// false. The default ToggleKey is Mouse1 + LeftAlt, and Mouse1 is the vanilla "Block"
+        /// binding - which PlayerController feeds into m_blocking unconditionally, bow included
+        /// (PlayerController.cs: "blockHold = GetButton(Block)"). So the activation combo itself
+        /// blocks for a few frames, leaves the draw at -1, and the permanently faked hold then
+        /// never gives the healing tick: branche 1 needs !m_attackHold, branche 2 needs >= 0,
+        /// branche 3 needs > 0 - nothing ever starts. Pressing any pause button (the default
+        /// pause set is exactly Forward/Backward/Left/Right) cut the hold for one tick and
+        /// "fixed" it, which is why moving the player made auto-attack come alive.
+        ///
+        /// The one-tick release here does the same thing deterministically, whatever put the
+        /// draw state at -1. m_attackDrawTime is protected on Humanoid, hence the FieldRef.
+        /// </summary>
+        private static bool BowDrawStuck()
+        {
+            Player player = Player.m_localPlayer;
+            if (player == null)
+                return false;
+
+            ItemDrop.ItemData weapon = player.GetCurrentWeapon();
+            if (weapon == null || !weapon.m_shared.m_attack.m_bowDraw)
+                return false; // cheap check first: only bow-draw weapons can have a draw state
+
+            return AttackDrawTimeRef(player) < 0f;
+        }
+
+        /// <summary>
+        /// True when a bow has been drawn to full tension and can be fired right now.
+        ///
+        /// Why this exists: Player.UpdateAttackBowDraw only calls StartAttack from its
+        /// "else if (m_attackDrawTime > 0f)" branch, which is reached only when m_attackHold
+        /// goes false - i.e. the arrow fires on the *release* of the attack button. With the
+        /// toggle faking a permanent hold, the draw fills to 100% and then just keeps draining
+        /// stamina (the "hold" branch) and never fires. So when the draw is full, we skip
+        /// forcing the hold for a single read: the game sees a release, fires the arrow
+        /// (StartAttack) and resets m_attackDrawTime to 0 - and the next read forces again,
+        /// starting a fresh draw. That turns one draw/fire cycle into continuous bow attack.
+        ///
+        /// InAttack() is required because Humanoid.StartAttack refuses while the previous
+        /// shot's animation still plays (and UpdateAttackBowDraw resets the full draw even on
+        /// a failed StartAttack) - without it, firing during the animation would silently eat
+        /// the completed draw.
+        ///
+        /// Only reached for name == "Attack", and after the __result/Active/Paused early-outs,
+        /// so a player physically holding Attack still gets pure vanilla behavior.
+        /// </summary>
+        private static bool BowFullyDrawn()
+        {
+            Player player = Player.m_localPlayer;
+            if (player == null)
+                return false;
+
+            ItemDrop.ItemData weapon = player.GetCurrentWeapon();
+            if (weapon == null || !weapon.m_shared.m_attack.m_bowDraw)
+                return false; // cheap check first: only bow-draw weapons ever need this
+
+            if (player.InAttack())
+                return false; // keep holding: firing now would fail StartAttack and eat the draw
+
+            return player.GetAttackDrawPercentage() >= 1f;
         }
     }
 
