@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
+using System.Reflection.Emit;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
@@ -18,7 +20,9 @@ namespace ToggleAutoAttack
         public const string PluginName = "ToggleAutoAttack";
         public const string PluginVersion = "1.2.0";
 
+        public static ConfigEntry<bool> Enabled;
         public static ConfigEntry<KeyboardShortcut> ToggleKey;
+        public static ConfigEntry<bool> CancelOnWeaponChange;
         public static ConfigEntry<bool> ShowOnScreenMessage;
         public static ConfigEntry<MessageHud.MessageType> ScreenMessagePosition;
 
@@ -34,11 +38,25 @@ namespace ToggleAutoAttack
             Instance = this;
             _log = Logger;
 
+            Enabled = Config.Bind(
+                "General",
+                "Enabled",
+                true,
+                "Master switch for the mod. When disabled, continuous attack is forced off and the game behaves exactly as vanilla (no toggle key, no pause/cancel buttons, no jump or weapon-swap adjustments)."
+            );
+
             ToggleKey = Config.Bind(
                 "General",
                 "ToggleKey",
                 new KeyboardShortcut(KeyCode.Mouse1, KeyCode.LeftAlt),
                 "Key combination that starts/stops continuous attacking (equivalent to holding down the attack button)."
+            );
+
+            CancelOnWeaponChange = Config.Bind(
+                "General",
+                "CancelOnWeaponChange",
+                true,
+                "Cancel continuous attack if the equipped weapon changes while it is active (swapping to another weapon, unequipping, or the weapon being destroyed)."
             );
 
             ShowOnScreenMessage = Config.Bind(
@@ -66,6 +84,17 @@ namespace ToggleAutoAttack
             if (DynamicButtonConfig.CancelEntries.Count == 0)
                 DynamicButtonConfig.Generate(Config);
 
+            // Master switch. AutoAttackState.Active is the single gate every Harmony patch
+            // checks (forced Attack hold, jump bypass, and all four weapon-swap guards), so
+            // resetting it here turns the whole mod inert: no toggle key, no pause/cancel, no
+            // weapon-change detection, and vanilla behavior everywhere else. Reset() also
+            // clears ActiveWeapon, so re-enabling later starts from a fresh baseline.
+            if (!Enabled.Value)
+            {
+                AutoAttackState.Reset();
+                return;
+            }
+
             if (Player.m_localPlayer == null)
             {
                 AutoAttackState.Reset();
@@ -92,6 +121,25 @@ namespace ToggleAutoAttack
             {
                 AutoAttackState.Reset();
                 ShowMessage("Continuous attack: cancelled");
+            }
+
+            // Safety: cancel if the weapon being attacked with changed since the toggle was
+            // turned on. Comparing ItemData references (not names or uids): swapping, unequipping
+            // or losing the weapon replaces Humanoid.m_rightItem/GetCurrentWeapon()'s result with
+            // a different instance, while merely moving the same item around in the inventory
+            // keeps the same instance and therefore does not cancel.
+            if (
+                !justToggled
+                && AutoAttackState.Active
+                && CancelOnWeaponChange.Value
+                && !ReferenceEquals(
+                    Player.m_localPlayer.GetCurrentWeapon(),
+                    AutoAttackState.ActiveWeapon
+                )
+            )
+            {
+                AutoAttackState.Reset();
+                ShowMessage("Continuous attack: cancelled (weapon changed)");
             }
         }
 
@@ -297,10 +345,18 @@ namespace ToggleAutoAttack
         public static bool Active { get; private set; }
         public static bool Paused { get; set; }
 
+        /// <summary>
+        /// The weapon equipped at the moment the toggle was turned on. CancelOnWeaponChange
+        /// compares the currently equipped weapon against this reference every Update and
+        /// cancels the toggle if it no longer matches.
+        /// </summary>
+        public static ItemDrop.ItemData ActiveWeapon { get; private set; }
+
         public static bool Toggle()
         {
             Active = !Active;
             Paused = false;
+            ActiveWeapon = Active ? Player.m_localPlayer?.GetCurrentWeapon() : null;
             return Active;
         }
 
@@ -308,6 +364,7 @@ namespace ToggleAutoAttack
         {
             Active = false;
             Paused = false;
+            ActiveWeapon = null;
         }
     }
 
@@ -371,6 +428,189 @@ namespace ToggleAutoAttack
             {
                 force = true;
             }
+        }
+    }
+
+    /// <summary>
+    /// Lets the player change weapon while the continuous-attack toggle is on.
+    ///
+    /// Why this is needed: vanilla refuses to swap equipment during a swing - three guards call
+    /// InAttack() (the animator's "attack" tag):
+    ///   1. Player.ToggleEquipped (hotbar 1-8 path: Player.Update -> UseHotbarItem ->
+    ///      Humanoid.UseItem -> ToggleEquipped) returns "handled" without doing anything, so the
+    ///      keypress is swallowed silently - the weapon simply never gets selected.
+    ///   2. Humanoid.EquipItem returns false (blocks the hotbar path too, plus inventory
+    ///      drag & drop, which calls EquipItem directly).
+    ///   3. Player.UpdateActionQueue freezes queued equip/unequip actions (items with
+    ///      m_equipDuration > 0), which never reach completion between swings that the fake
+    ///      held Attack restarts every FixedUpdate.
+    /// With the toggle faking a held Attack, InAttack() is true almost always, so all three
+    /// guards make weapon swapping look completely dead.
+    ///
+    /// How: the three patches below transpile those methods, replacing the InAttack() call with
+    /// the helpers here. Stack shape is unchanged (the receiver was already pushed for the
+    /// original callvirt, one bool comes back) and every other check in those methods - InDodge,
+    /// dead, swimming, durability, DLC, ... - stays intact. Outside the toggle (or for any other
+    /// character) the helpers fall through to the real InAttack(), so vanilla behavior is
+    /// untouched.
+    /// </summary>
+    internal static class EquipDuringAutoAttack
+    {
+        private static readonly MethodInfo BlocksEquipMethod =
+            AccessTools.Method(typeof(EquipDuringAutoAttack), nameof(BlocksEquip));
+
+        private static readonly MethodInfo BlocksQueuedActionMethod =
+            AccessTools.Method(typeof(EquipDuringAutoAttack), nameof(BlocksQueuedAction));
+
+        private static readonly FieldRef<Player, List<Player.MinorActionData>> ActionQueueRef =
+            FieldRefAccess<Player, List<Player.MinorActionData>>("m_actionQueue");
+
+        /// <summary>
+        /// True only for the local player while the toggle is active (paused counts as active -
+        /// Reset() is not called when pausing, and the residual swing blocks swaps either way).
+        /// </summary>
+        private static bool BypassEnabled(Humanoid self)
+        {
+            return AutoAttackState.Active && self == Player.m_localPlayer;
+        }
+
+        /// <summary>Replaces InAttack() in Player.ToggleEquipped and Humanoid.EquipItem.</summary>
+        public static bool BlocksEquip(Humanoid self)
+        {
+            return !BypassEnabled(self) && self.InAttack();
+        }
+
+        /// <summary>
+        /// Replaces InAttack() in Player.UpdateActionQueue. Only Equip/Unequip heads are
+        /// bypassed so their progress bar advances during auto-attack; other queued actions -
+
+        /// notably Reload for crossbows - keep the vanilla "not while attacking" rule.
+        /// </summary>
+        public static bool BlocksQueuedAction(Humanoid self)
+        {
+            if (BypassEnabled(self))
+            {
+                List<Player.MinorActionData> queue = ActionQueueRef((Player)self);
+                if (queue.Count > 0)
+                {
+                    Player.MinorActionData.ActionType type = queue[0].m_type;
+                    if (
+                        type == Player.MinorActionData.ActionType.Equip
+                        || type == Player.MinorActionData.ActionType.Unequip
+                    )
+                    {
+                        return false;
+                    }
+                }
+            }
+            return self.InAttack();
+        }
+
+        public static IEnumerable<CodeInstruction> TranspileBlocksEquip(
+            IEnumerable<CodeInstruction> instructions
+        )
+        {
+            return ReplaceInAttackCall(instructions, BlocksEquipMethod);
+        }
+
+        public static IEnumerable<CodeInstruction> TranspileBlocksQueuedAction(
+            IEnumerable<CodeInstruction> instructions
+        )
+        {
+            return ReplaceInAttackCall(instructions, BlocksQueuedActionMethod);
+        }
+
+        /// <summary>
+        /// Swaps every InAttack() call (callvirt or call, operand may be declared on either
+        /// Humanoid or Character) for the given static helper taking the receiver as its single
+        /// parameter: identical stack shape, mutated in place so branch labels are preserved.
+        /// Each patched method contains exactly one such call.
+        /// </summary>
+        private static IEnumerable<CodeInstruction> ReplaceInAttackCall(
+            IEnumerable<CodeInstruction> instructions,
+            MethodInfo replacement
+        )
+        {
+            foreach (CodeInstruction instruction in instructions)
+            {
+                if (
+                    (instruction.opcode == OpCodes.Callvirt || instruction.opcode == OpCodes.Call)
+                    && instruction.operand is MethodInfo target
+                    && target.Name == nameof(Character.InAttack)
+                )
+                {
+                    instruction.opcode = OpCodes.Call;
+                    instruction.operand = replacement;
+                }
+                yield return instruction;
+            }
+        }
+    }
+
+    /// <summary>Guard 1: hotbar 1-8 presses were swallowed silently while InAttack().</summary>
+    [HarmonyPatch(typeof(Player), "ToggleEquipped")]
+    internal static class Player_ToggleEquipped_AllowSwapDuringAutoAttack
+    {
+        private static IEnumerable<CodeInstruction> Transpiler(
+            IEnumerable<CodeInstruction> instructions
+        )
+        {
+            return EquipDuringAutoAttack.TranspileBlocksEquip(instructions);
+        }
+    }
+
+    /// <summary>
+    /// Guard 2: EquipItem refused the swap (hotbar path and inventory drag &amp; drop both end
+    /// up here). InDodge() is left untouched - the toggle never fakes a dodge.
+    /// </summary>
+    [HarmonyPatch(typeof(Humanoid), nameof(Humanoid.EquipItem))]
+    internal static class Humanoid_EquipItem_AllowSwapDuringAutoAttack
+    {
+        private static IEnumerable<CodeInstruction> Transpiler(
+            IEnumerable<CodeInstruction> instructions
+        )
+        {
+            return EquipDuringAutoAttack.TranspileBlocksEquip(instructions);
+        }
+    }
+
+    /// <summary>
+    /// Guard 3: queued equip/unequip actions for items with m_equipDuration &gt; 0 never
+    /// progressed because the action queue returns early while InAttack().
+    /// </summary>
+    [HarmonyPatch(typeof(Player), "UpdateActionQueue")]
+    internal static class Player_UpdateActionQueue_AllowQueuedSwapDuringAutoAttack
+    {
+        private static IEnumerable<CodeInstruction> Transpiler(
+            IEnumerable<CodeInstruction> instructions
+        )
+        {
+            return EquipDuringAutoAttack.TranspileBlocksQueuedAction(instructions);
+        }
+    }
+
+    /// <summary>
+    /// Guard 4: the "Hide/show weapon" hotkey (ZInput button "Hide", handled in Player.Update)
+    /// only calls HideHandItems() when !InAttack() &amp;&amp; !InDodge(). With the toggle faking a
+    /// held Attack, InAttack() is true almost always, so pressing the key did nothing except in
+    /// the rare one-frame gap between two swings - the user had to press repeatedly before the
+    /// weapon actually got hidden. That hide is also what flips GetCurrentWeapon() and lets
+    /// CancelOnWeaponChange cancel the toggle, hence "several presses to cancel".
+    ///
+    /// InDodge() stays untouched (the toggle never fakes a dodge). The show path
+    /// (ShowHandItems -> EquipItem) was already unlocked by the EquipItem patch above.
+    /// Player.Update contains exactly one InAttack() call (verified: lines 838-1019), so
+    /// replacing it via the shared helper is precise. JoyHide shares the same block, so the
+    /// gamepad path is covered too.
+    /// </summary>
+    [HarmonyPatch(typeof(Player), "Update")]
+    internal static class Player_Update_AllowHideDuringAutoAttack
+    {
+        private static IEnumerable<CodeInstruction> Transpiler(
+            IEnumerable<CodeInstruction> instructions
+        )
+        {
+            return EquipDuringAutoAttack.TranspileBlocksEquip(instructions);
         }
     }
 
