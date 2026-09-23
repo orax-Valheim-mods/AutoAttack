@@ -60,14 +60,18 @@ namespace ToggleAutoAttack
                 return;
             }
 
+            bool justToggled = false;
+
             // Minimap.InTextInput() avoids toggling while chatting.
             if (!Minimap.InTextInput() && ToggleKey.Value.IsDown())
             {
                 bool active = AutoAttackState.Toggle();
                 ShowMessage(active ? "Continuous attack: ON" : "Continuous attack: OFF");
+                justToggled = true;
             }
 
-            if (AutoAttackState.Active && DynamicButtonConfig.AnyDown(DynamicButtonConfig.CancelEntries))
+            // Skip cancel check on the exact frame the toggle hotkey was pressed.
+            if (!justToggled && AutoAttackState.Active && DynamicButtonConfig.AnyDown(DynamicButtonConfig.CancelEntries))
             {
                 AutoAttackState.Reset();
                 ShowMessage("Continuous attack: cancelled");
