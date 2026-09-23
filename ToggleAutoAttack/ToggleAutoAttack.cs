@@ -34,7 +34,7 @@ namespace ToggleAutoAttack
             _log = Logger;
 
             ToggleKey = Config.Bind(
-                "General", "ToggleKey", new KeyboardShortcut(KeyCode.X, KeyCode.LeftAlt),
+                "General", "ToggleKey", new KeyboardShortcut(KeyCode.Mouse1, KeyCode.LeftAlt),
                 "Key combination that starts/stops continuous attacking (equivalent to holding down the attack button).");
 
             ShowOnScreenMessage = Config.Bind(
@@ -124,12 +124,14 @@ namespace ToggleAutoAttack
             {
                 string label = DescribeButton(instance, name);
 
+                bool defaultValue = name is "SecondaryAttack" or "Block" or "Use" or "Crouch" or "AltDodge" or "AutoRun" or "Sit";
                 CancelEntries[name] = config.Bind(
-                    "CancelButtons", name, name == "Attack",
+                    "CancelButtons", name, defaultValue,
                     $"Pressing {label} fully cancels continuous attack.");
 
+                defaultValue = name is "SecondaryAttack" or "Block" or "Forward" or "Left" or "Backward" or "Right";
                 PauseEntries[name] = config.Bind(
-                    "PauseButtons", name, name == "Forward",
+                    "PauseButtons", name, defaultValue,
                     $"Holding {label} temporarily pauses continuous attack; it resumes automatically on release.");
             }
 
