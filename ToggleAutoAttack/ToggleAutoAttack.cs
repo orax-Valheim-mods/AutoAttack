@@ -1,10 +1,10 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using UnityEngine;
 using static HarmonyLib.AccessTools;
 
@@ -20,6 +20,7 @@ namespace ToggleAutoAttack
 
         public static ConfigEntry<KeyboardShortcut> ToggleKey;
         public static ConfigEntry<bool> ShowOnScreenMessage;
+        public static ConfigEntry<MessageHud.MessageType> ScreenMessagePosition;
 
         internal static ToggleAutoAttack Instance;
 
@@ -34,12 +35,25 @@ namespace ToggleAutoAttack
             _log = Logger;
 
             ToggleKey = Config.Bind(
-                "General", "ToggleKey", new KeyboardShortcut(KeyCode.Mouse1, KeyCode.LeftAlt),
-                "Key combination that starts/stops continuous attacking (equivalent to holding down the attack button).");
+                "General",
+                "ToggleKey",
+                new KeyboardShortcut(KeyCode.Mouse1, KeyCode.LeftAlt),
+                "Key combination that starts/stops continuous attacking (equivalent to holding down the attack button)."
+            );
 
             ShowOnScreenMessage = Config.Bind(
-                "General", "ShowOnScreenMessage", true,
-                "Show a short on-screen message when continuous attack turns on, off, or gets cancelled.");
+                "HUD",
+                "ShowOnScreenMessage",
+                true,
+                "Show a short on-screen message when continuous attack turns on, off, or gets cancelled."
+            );
+
+            ScreenMessagePosition = Config.Bind(
+                "HUD",
+                "ScreenMessagePosition",
+                MessageHud.MessageType.TopLeft,
+                "Position of the screen message."
+            );
 
             _harmony = new Harmony(PluginGuid);
             _harmony.PatchAll();
@@ -49,8 +63,6 @@ namespace ToggleAutoAttack
 
         private void Update()
         {
-            // Fallback in case ZInput.Initialize() somehow already ran before our Harmony patch
-            // was applied: generate the per-button entries here too, it's a no-op once already done.
             if (DynamicButtonConfig.CancelEntries.Count == 0)
                 DynamicButtonConfig.Generate(Config);
 
@@ -60,9 +72,11 @@ namespace ToggleAutoAttack
                 return;
             }
 
+            // Evaluate pause state at the beginning of Update
+            AutoAttackState.Paused = DynamicButtonConfig.AnyHeld(DynamicButtonConfig.PauseEntries);
+
             bool justToggled = false;
 
-            // Minimap.InTextInput() avoids toggling while chatting.
             if (!Minimap.InTextInput() && ToggleKey.Value.IsDown())
             {
                 bool active = AutoAttackState.Toggle();
@@ -70,21 +84,22 @@ namespace ToggleAutoAttack
                 justToggled = true;
             }
 
-            // Skip cancel check on the exact frame the toggle hotkey was pressed.
-            if (!justToggled && AutoAttackState.Active && DynamicButtonConfig.AnyDown(DynamicButtonConfig.CancelEntries))
+            if (
+                !justToggled
+                && AutoAttackState.Active
+                && DynamicButtonConfig.AnyDown(DynamicButtonConfig.CancelEntries)
+            )
             {
                 AutoAttackState.Reset();
                 ShowMessage("Continuous attack: cancelled");
             }
-
-            AutoAttackState.Paused = DynamicButtonConfig.AnyHeld(DynamicButtonConfig.PauseEntries);
         }
 
         internal void ShowMessage(string text)
         {
             if (ShowOnScreenMessage.Value && MessageHud.instance != null)
             {
-                MessageHud.instance.ShowMessage(MessageHud.MessageType.Center, text);
+                MessageHud.instance.ShowMessage(ScreenMessagePosition.Value, text);
             }
         }
 
@@ -104,8 +119,10 @@ namespace ToggleAutoAttack
     /// </summary>
     internal static class DynamicButtonConfig
     {
-        public static readonly Dictionary<string, ConfigEntry<bool>> CancelEntries = new Dictionary<string, ConfigEntry<bool>>();
-        public static readonly Dictionary<string, ConfigEntry<bool>> PauseEntries = new Dictionary<string, ConfigEntry<bool>>();
+        public static readonly Dictionary<string, ConfigEntry<bool>> CancelEntries =
+            new Dictionary<string, ConfigEntry<bool>>();
+        public static readonly Dictionary<string, ConfigEntry<bool>> PauseEntries =
+            new Dictionary<string, ConfigEntry<bool>>();
 
         private static readonly FieldRef<ZInput, Dictionary<string, ZInput.ButtonDef>> ButtonsRef =
             AccessTools.FieldRefAccess<ZInput, Dictionary<string, ZInput.ButtonDef>>("m_buttons");
@@ -119,8 +136,9 @@ namespace ToggleAutoAttack
             if (instance == null)
                 return; // too early - ZInput not constructed yet
 
-            IEnumerable<string> names = ButtonsRef.Invoke(instance).Values
-                .Where(b => b.Rebindable) // keep only real player-facing actions
+            IEnumerable<string> names = ButtonsRef
+                .Invoke(instance)
+                .Values.Where(b => b.Rebindable) // keep only real player-facing actions
                 .Select(b => b.Name)
                 .OrderBy(n => n, StringComparer.OrdinalIgnoreCase);
 
@@ -128,18 +146,45 @@ namespace ToggleAutoAttack
             {
                 string label = DescribeButton(instance, name);
 
-                bool defaultValue = name is "SecondaryAttack" or "Block" or "Use" or "Crouch" or "AltDodge" or "AutoRun" or "Sit";
-                CancelEntries[name] = config.Bind(
-                    "CancelButtons", name, defaultValue,
-                    $"Pressing {label} fully cancels continuous attack.");
+                bool cancelDefaultValue =
+                    name
+                    is "Attack"
+                        or "SecondaryAttack"
+                        or "Block"
+                        or "Use"
+                        or "Crouch"
+                        or "AltDodge"
+                        or "AutoRun"
+                        or "Sit";
 
-                defaultValue = name is "SecondaryAttack" or "Block" or "Forward" or "Left" or "Backward" or "Right";
+                CancelEntries[name] = config.Bind(
+                    "Cancel buttons",
+                    name,
+                    cancelDefaultValue,
+                    $"Pressing {label} fully cancels continuous attack."
+                );
+
+                bool pauseDefaultValue =
+                    name
+                    is "SecondaryAttack"
+                        or "Jump"
+                        or "Block"
+                        or "Forward"
+                        or "Left"
+                        or "Backward"
+                        or "Right";
+
                 PauseEntries[name] = config.Bind(
-                    "PauseButtons", name, defaultValue,
-                    $"Holding {label} temporarily pauses continuous attack; it resumes automatically on release.");
+                    "Pause buttons",
+                    name,
+                    pauseDefaultValue,
+                    $"Holding {label} temporarily pauses continuous attack; it resumes automatically on release."
+                );
             }
 
-            ToggleAutoAttack.LogStatic($"Generated {CancelEntries.Count} cancel/pause button entries from ZInput.");
+            ToggleAutoAttack.LogStatic(
+                $"Generated {CancelEntries.Count} cancel/pause button entries from ZInput."
+            );
         }
 
         /// <summary>
@@ -196,6 +241,7 @@ namespace ToggleAutoAttack
                 return $"\"{name}\" ({translated})";
             if (hasBoundKey)
                 return $"\"{name}\" (currently bound to: {boundKey})";
+
             return $"\"{name}\"";
         }
 
