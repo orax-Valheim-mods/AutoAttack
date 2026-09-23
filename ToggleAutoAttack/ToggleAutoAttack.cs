@@ -164,6 +164,13 @@ namespace ToggleAutoAttack
                     $"Pressing {label} fully cancels continuous attack."
                 );
 
+                // "Attack" is deliberately never a pause button: the toggle itself fakes a held
+                // Attack through the ZInput.GetButton patch, so AnyHeld would read back the
+                // forced value while evaluating the pause state. That makes Paused depend on
+                // its own previous-frame value and the toggle would flicker on/off every frame.
+                if (name == "Attack")
+                    continue;
+
                 bool pauseDefaultValue =
                     name
                     is "SecondaryAttack"
