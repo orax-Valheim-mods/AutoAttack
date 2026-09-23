@@ -4,7 +4,9 @@ using BepInEx.Logging;
 using HarmonyLib;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
+using static HarmonyLib.AccessTools;
 
 namespace ToggleAutoAttack
 {
@@ -14,12 +16,12 @@ namespace ToggleAutoAttack
         // TODO: change the GUID to match your own naming convention (e.g. "yourname.valheim.toggleautoattack")
         public const string PluginGuid = "sopmehua.valheim.toggleautoattack";
         public const string PluginName = "ToggleAutoAttack";
-        public const string PluginVersion = "1.1.0";
+        public const string PluginVersion = "1.2.0";
 
         public static ConfigEntry<KeyboardShortcut> ToggleKey;
         public static ConfigEntry<bool> ShowOnScreenMessage;
-        public static ConfigEntry<string> CancelButtons;
-        public static ConfigEntry<string> PauseButtons;
+
+        internal static ToggleAutoAttack Instance;
 
         private static ManualLogSource _log;
         private Harmony _harmony;
@@ -28,6 +30,7 @@ namespace ToggleAutoAttack
 
         private void Awake()
         {
+            Instance = this;
             _log = Logger;
 
             ToggleKey = Config.Bind(
@@ -38,17 +41,6 @@ namespace ToggleAutoAttack
                 "General", "ShowOnScreenMessage", true,
                 "Show a short on-screen message when continuous attack turns on, off, or gets cancelled.");
 
-            CancelButtons = Config.Bind(
-                "General", "CancelButtons", "Attack",
-                "Comma-separated list of Valheim input button names (same names used by the game's own " +
-                "control bindings, e.g. Attack, Jump, Dodge, Block...). Pressing any of them fully cancels " +
-                "continuous attack. Uses the player's current key bindings automatically, including rebinds.");
-
-            PauseButtons = Config.Bind(
-                "General", "PauseButtons", "Forward",
-                "Comma-separated list of Valheim input button names. Holding any of them temporarily pauses " +
-                "continuous attack; it resumes automatically on release (e.g. Forward).");
-
             _harmony = new Harmony(PluginGuid);
             _harmony.PatchAll();
 
@@ -57,6 +49,11 @@ namespace ToggleAutoAttack
 
         private void Update()
         {
+            // Fallback in case ZInput.Initialize() somehow already ran before our Harmony patch
+            // was applied: generate the per-button entries here too, it's a no-op once already done.
+            if (DynamicButtonConfig.CancelEntries.Count == 0)
+                DynamicButtonConfig.Generate(Config);
+
             if (Player.m_localPlayer == null)
             {
                 AutoAttackState.Reset();
@@ -70,16 +67,16 @@ namespace ToggleAutoAttack
                 ShowMessage(active ? "Continuous attack: ON" : "Continuous attack: OFF");
             }
 
-            if (AutoAttackState.Active && ButtonList.AnyDown(CancelButtons.Value))
+            if (AutoAttackState.Active && DynamicButtonConfig.AnyDown(DynamicButtonConfig.CancelEntries))
             {
                 AutoAttackState.Reset();
                 ShowMessage("Continuous attack: cancelled");
             }
 
-            AutoAttackState.Paused = ButtonList.AnyHeld(PauseButtons.Value);
+            AutoAttackState.Paused = DynamicButtonConfig.AnyHeld(DynamicButtonConfig.PauseEntries);
         }
 
-        private void ShowMessage(string text)
+        internal void ShowMessage(string text)
         {
             if (ShowOnScreenMessage.Value && MessageHud.instance != null)
             {
@@ -94,44 +91,82 @@ namespace ToggleAutoAttack
     }
 
     /// <summary>
-    /// Parses and checks comma-separated lists of ZInput button names (e.g. "Attack,Jump").
-    /// Using ZInput's own button names rather than raw KeyCodes means these automatically track
-    /// the player's current key bindings, including rebinds done in the game's own options.
-    /// Unknown/misspelled names are silently ignored by ZInput itself (TryGetButtonState just
-    /// falls through to false), so a typo here won't throw - it just won't match anything.
+    /// Generates one ConfigEntry&lt;bool&gt; per real Valheim input button - a checkbox under
+    /// "CancelButtons" and one under "PauseButtons" - instead of a free-text comma-separated list.
+    /// Button names are read via reflection from ZInput's private m_buttons dictionary rather than
+    /// hardcoded, so the list always matches whatever this game version (or another mod) actually
+    /// registers. Only Rebindable buttons are included, to filter out internal/system-only entries
+    /// and keep the config to real player-facing actions.
     /// </summary>
-    internal static class ButtonList
+    internal static class DynamicButtonConfig
     {
-        public static bool AnyDown(string namesCsv)
+        public static readonly Dictionary<string, ConfigEntry<bool>> CancelEntries = new Dictionary<string, ConfigEntry<bool>>();
+        public static readonly Dictionary<string, ConfigEntry<bool>> PauseEntries = new Dictionary<string, ConfigEntry<bool>>();
+
+        private static readonly FieldRef<ZInput, Dictionary<string, ZInput.ButtonDef>> ButtonsRef =
+            AccessTools.FieldRefAccess<ZInput, Dictionary<string, ZInput.ButtonDef>>("m_buttons");
+
+        public static void Generate(ConfigFile config)
         {
-            foreach (string name in Split(namesCsv))
+            if (CancelEntries.Count > 0)
+                return; // already generated
+
+            ZInput instance = ZInput.instance;
+            if (instance == null)
+                return; // too early - ZInput not constructed yet
+
+            IEnumerable<string> names = ButtonsRef.Invoke(instance).Values
+                .Where(b => b.Rebindable) // keep only real player-facing actions
+                .Select(b => b.Name)
+                .OrderBy(n => n, StringComparer.OrdinalIgnoreCase);
+
+            foreach (string name in names)
             {
-                if (ZInput.GetButtonDown(name))
+                CancelEntries[name] = config.Bind(
+                    "CancelButtons", name, name == "Attack",
+                    $"Pressing \"{name}\" fully cancels continuous attack.");
+
+                PauseEntries[name] = config.Bind(
+                    "PauseButtons", name, name == "Forward",
+                    $"Holding \"{name}\" temporarily pauses continuous attack; it resumes automatically on release.");
+            }
+
+            ToggleAutoAttack.LogStatic($"Generated {CancelEntries.Count} cancel/pause button entries from ZInput.");
+        }
+
+        public static bool AnyDown(Dictionary<string, ConfigEntry<bool>> entries)
+        {
+            foreach (KeyValuePair<string, ConfigEntry<bool>> pair in entries)
+            {
+                if (pair.Value.Value && ZInput.GetButtonDown(pair.Key))
                     return true;
             }
             return false;
         }
 
-        public static bool AnyHeld(string namesCsv)
+        public static bool AnyHeld(Dictionary<string, ConfigEntry<bool>> entries)
         {
-            foreach (string name in Split(namesCsv))
+            foreach (KeyValuePair<string, ConfigEntry<bool>> pair in entries)
             {
-                if (ZInput.GetButton(name))
+                if (pair.Value.Value && ZInput.GetButton(pair.Key))
                     return true;
             }
             return false;
         }
+    }
 
-        private static IEnumerable<string> Split(string csv)
+    /// <summary>
+    /// Generates the per-button config entries as soon as ZInput itself is ready. See
+    /// DynamicButtonConfig's doc comment for why this specific hook point was chosen.
+    /// </summary>
+    [HarmonyPatch(typeof(ZInput), nameof(ZInput.Initialize))]
+    internal static class ZInput_Initialize_GenerateButtonConfig
+    {
+        private static void Postfix()
         {
-            if (string.IsNullOrWhiteSpace(csv))
-                yield break;
-
-            foreach (string part in csv.Split(','))
+            if (ToggleAutoAttack.Instance != null)
             {
-                string trimmed = part.Trim();
-                if (trimmed.Length > 0)
-                    yield return trimmed;
+                DynamicButtonConfig.Generate(ToggleAutoAttack.Instance.Config);
             }
         }
     }
@@ -164,10 +199,10 @@ namespace ToggleAutoAttack
     /// button - nothing else needs to change.
     ///
     /// Scope: only ZInput.GetButton (the held/continuous query) is patched, and only for the
-    /// exact button name "Attack". GetButtonDown/GetButtonUp - used by ButtonList.AnyDown for
-    /// cancellation, including the default "Attack" cancel entry - read a completely separate,
-    /// independently-tracked state (ButtonDef.Pressed/Released vs Held in ZInput.cs), so a
-    /// genuine manual click is always detected correctly regardless of this patch.
+    /// exact button name "Attack". GetButtonDown/GetButtonUp - used by DynamicButtonConfig.AnyDown
+    /// for cancellation - read a completely separate, independently-tracked state
+    /// (ButtonDef.Pressed/Released vs Held in ZInput.cs), so a genuine manual click is always
+    /// detected correctly regardless of this patch.
     /// </summary>
     [HarmonyPatch(typeof(ZInput), nameof(ZInput.GetButton), new Type[] { typeof(string) })]
     internal static class ZInput_GetButton_ForceAttackHold
