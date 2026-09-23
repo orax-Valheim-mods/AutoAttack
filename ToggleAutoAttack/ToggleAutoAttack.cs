@@ -166,6 +166,15 @@ namespace ToggleAutoAttack
             try
             {
                 boundKey = instance.GetBoundKeyString(name, emptyStringOnMissing: true);
+                // GetBoundKeyString can return either an already-displayable string (from
+                // InputBinding.ToDisplayString, for most keyboard keys) or a raw localization key
+                // pulled from ZInput's own s_keyLocalizationMap (e.g. "$button_mouse0" for mouse
+                // buttons). Localize() only replaces recognized "$xxx" tokens and leaves plain
+                // text untouched, so running the result through it handles both cases correctly.
+                if (!string.IsNullOrEmpty(boundKey) && Localization.instance != null)
+                {
+                    boundKey = Localization.instance.Localize(boundKey);
+                }
             }
             catch (Exception e)
             {
