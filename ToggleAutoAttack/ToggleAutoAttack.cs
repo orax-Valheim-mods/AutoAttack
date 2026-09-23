@@ -122,16 +122,66 @@ namespace ToggleAutoAttack
 
             foreach (string name in names)
             {
+                string label = DescribeButton(instance, name);
+
                 CancelEntries[name] = config.Bind(
                     "CancelButtons", name, name == "Attack",
-                    $"Pressing \"{name}\" fully cancels continuous attack.");
+                    $"Pressing {label} fully cancels continuous attack.");
 
                 PauseEntries[name] = config.Bind(
                     "PauseButtons", name, name == "Forward",
-                    $"Holding \"{name}\" temporarily pauses continuous attack; it resumes automatically on release.");
+                    $"Holding {label} temporarily pauses continuous attack; it resumes automatically on release.");
             }
 
             ToggleAutoAttack.LogStatic($"Generated {CancelEntries.Count} cancel/pause button entries from ZInput.");
+        }
+
+        /// <summary>
+        /// Builds a label like: "Attack" (Attaque, currently bound to: Mouse Left)
+        /// - the technical ZInput name (used as the actual lookup key everywhere else),
+        /// - its translation in the game's current UI language, via the same "$settings_" +
+        ///   name.ToLower() key convention ZInput itself uses to build its own settings menu
+        ///   labels (see ZInput.FormatAndAddString),
+        /// - the key/button currently bound to it, via ZInput's own GetBoundKeyString().
+        /// Both dynamic parts are looked up defensively: Localization may not be initialized yet
+        /// at this point in the game's startup sequence, and this class's exact behavior on a
+        /// missing translation couldn't be verified from the decompiled source available here.
+        /// </summary>
+        private static string DescribeButton(ZInput instance, string name)
+        {
+            string translated = null;
+            try
+            {
+                if (Localization.instance != null)
+                {
+                    translated = Localization.instance.Localize("$settings_" + name.ToLower());
+                }
+            }
+            catch (Exception e)
+            {
+                ToggleAutoAttack.LogStatic($"Could not localize button \"{name}\": {e.Message}");
+            }
+
+            string boundKey = null;
+            try
+            {
+                boundKey = instance.GetBoundKeyString(name, emptyStringOnMissing: true);
+            }
+            catch (Exception e)
+            {
+                ToggleAutoAttack.LogStatic($"Could not read bound key for \"{name}\": {e.Message}");
+            }
+
+            bool hasTranslation = !string.IsNullOrEmpty(translated) && translated != name;
+            bool hasBoundKey = !string.IsNullOrEmpty(boundKey);
+
+            if (hasTranslation && hasBoundKey)
+                return $"\"{name}\" ({translated}, currently bound to: {boundKey})";
+            if (hasTranslation)
+                return $"\"{name}\" ({translated})";
+            if (hasBoundKey)
+                return $"\"{name}\" (currently bound to: {boundKey})";
+            return $"\"{name}\"";
         }
 
         public static bool AnyDown(Dictionary<string, ConfigEntry<bool>> entries)
