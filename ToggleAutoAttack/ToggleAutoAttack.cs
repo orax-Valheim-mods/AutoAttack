@@ -338,6 +338,43 @@ namespace ToggleAutoAttack
     }
 
     /// <summary>
+    /// Lets the local player's jump through while the toggle is on.
+    ///
+    /// Why this is needed: Character.Jump refuses to jump while InAttack() unless force is set
+    /// (Character.cs: "force || !InAttack()"). With the toggle faking a held Attack, the swing
+    /// animation is restarted every FixedUpdate (Player.cs: m_attackHold feeds StartAttack), so
+    /// InAttack() - the animator's "attack" tag - is true almost always. Meanwhile the jump edge
+    /// is computed exactly once (PlayerController.FixedUpdate: jump = button &amp;&amp; !m_lastJump)
+    /// and is never retried: the press gets swallowed and the player never jumps.
+    ///
+    /// The "Jump" pause button only stops the *fake hold*; the swing already in progress keeps its
+    /// attack animator tag until the animation ends, which is long after the one-frame edge. So we
+    /// force the jump through instead - the same force path the vanilla game itself uses
+    /// (CharacterAnimEvent calls Jump(force: true) from animation events).
+    ///
+    /// Scope: local player only, toggle Active (paused counts as active - Reset() is not called),
+    /// and Jump/JoyJump must actually be held, so vanilla behavior is untouched while the toggle
+    /// is off. Only the !InAttack() check is bypassed; grounded/dead/encumbered/dodge checks in
+    /// Character.Jump still apply.
+    /// </summary>
+    [HarmonyPatch(typeof(Character), nameof(Character.Jump), new Type[] { typeof(bool) })]
+    internal static class Character_Jump_AllowWhileAutoAttack
+    {
+        private static void Prefix(Character __instance, ref bool force)
+        {
+            if (
+                !force
+                && AutoAttackState.Active
+                && __instance == Player.m_localPlayer
+                && (ZInput.GetButton("Jump") || ZInput.GetButton("JoyJump"))
+            )
+            {
+                force = true;
+            }
+        }
+    }
+
+    /// <summary>
     /// Safety net: turns the toggle off automatically when the local player dies, so continuous
     /// attack doesn't stay silently active through a respawn.
     /// </summary>
