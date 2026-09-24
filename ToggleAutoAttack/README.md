@@ -15,4 +15,4 @@ Copy the DLL file to `Steam\steamapps\common\Valheim\BepInEx\plugins\`
 
 # Misc.
 
-Source code: https://github.com/orax-Valheim-mods/
+Source code: https://github.com/orax-Valheim-mods/ToggleAutoAttack

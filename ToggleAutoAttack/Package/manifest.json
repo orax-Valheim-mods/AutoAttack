@@ -1,10 +1,9 @@
 ﻿{
-  "name": "JotunnModStub",
+  "name": "ToggleAutoAttack",
   "description": "",
   "version_number": "0.1.0",
-  "website_url": "",
+  "website_url": "https://github.com/orax-Valheim-mods/ToggleAutoAttack",
   "dependencies": [
-    "denikson-BepInExPack_Valheim-5.4.2333",
-    "ValheimModding-Jotunn-2.26.1"
+    "denikson-BepInExPack_Valheim-5.4.2333"
   ]
 }
