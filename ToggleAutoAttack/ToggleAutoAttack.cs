@@ -21,6 +21,7 @@ public class ToggleAutoAttack : BaseUnityPlugin
 
     public static ConfigEntry<bool> Enabled;
     public static ConfigEntry<KeyboardShortcut> ToggleKey;
+    public static ConfigEntry<string> GamepadToggleButtons;
     public static ConfigEntry<bool> CancelOnWeaponChange;
     public static ConfigEntry<bool> ShowOnScreenMessage;
     public static ConfigEntry<MessageHud.MessageType> ScreenMessagePosition;
@@ -49,10 +50,17 @@ public class ToggleAutoAttack : BaseUnityPlugin
         );
 
         ToggleKey = Config.Bind(
-            "General",
+            "Keyboard",
             "Toggle auto-attack key",
             new KeyboardShortcut(KeyCode.Mouse1, KeyCode.LeftAlt),
-            "Key combination that starts/stops continuous attacking (equivalent to holding down the attack button)."
+            "Keyboard key combination that starts/stops continuous attacking (equivalent to holding down the attack button)."
+        );
+
+        GamepadToggleButtons = Config.Bind(
+            "Gamepad",
+            "Toggle auto-attack buttons",
+            "JoyLBumper, JoyRBumper",
+            "Gamepad buttons that must all be held together to start/stop continuous attacking, as comma or plus separated ZInput button names (JoyLBumper, JoyRBumper = L1 + R1 by default). The combo fires on the press that completes it, like the keyboard combination. Leave empty to disable the gamepad toggle."
         );
 
         CancelOnWeaponChange = Config.Bind(
@@ -115,6 +123,11 @@ public class ToggleAutoAttack : BaseUnityPlugin
         if (DynamicButtonConfig.CancelEntries.Count == 0)
             DynamicButtonConfig.Generate(Config);
 
+        // Parsed and edge-tracked on every frame - even while the toggle is disabled or no
+        // player is loaded - so releases are observed too and the press edge never goes stale
+        // (e.g. when the combo is completed and released while typing in chat).
+        bool gamepadToggleDown = GamepadToggleDown();
+
         // Master switch. AutoAttackState.Active is the single gate every Harmony patch
         // checks (forced Attack hold, jump bypass, and all four weapon-swap guards), so
         // resetting it here turns the whole mod inert: no toggle key, no pause/cancel, no
@@ -137,7 +150,10 @@ public class ToggleAutoAttack : BaseUnityPlugin
 
         bool justToggled = false;
 
-        if (!Minimap.InTextInput() && ToggleKey.Value.IsDown())
+        if (
+            !Minimap.InTextInput()
+            && (ToggleKey.Value.IsDown() || gamepadToggleDown)
+        )
         {
             bool active = AutoAttackState.Toggle();
             ShowMessage(active ? MessageOn.Value : MessageOff.Value);
@@ -184,6 +200,72 @@ public class ToggleAutoAttack : BaseUnityPlugin
         }
     }
 
+    private static string[] _gamepadChord = new string[0];
+    private static string _gamepadChordRaw;
+    private static bool _gamepadChordHeldLastFrame;
+    private static bool _gamepadChordValidated;
+
+    /// <summary>
+    /// Gamepad twin of ToggleKey: fires once when every button of the configured combo is
+    /// held together - the same "press completes the combo" edge as KeyboardShortcut.IsDown,
+    /// tracked here because ZInput has no combo concept of its own.
+    ///
+    /// Runs on every Update regardless of Enabled/player state so the held state (and thus
+    /// the release that re-arms the edge) is always observed; the caller decides whether the
+    /// resulting press counts.
+    ///
+    /// Default JoyLBumper + JoyRBumper (L1 + R1), audited against the game's own use of the
+    /// raw buttons: L3+R3 is the guardian-power chord (Player.Update flag6), R3 hides the
+    /// weapon (which would trip CancelOnWeaponChange right after toggling), Start/Select open
+    /// menu/map, and the triggers are the game's modifier prefix (console, connect panel) -
+    /// while the bumpers only have hold-style actions plus one harmless secondary-attack
+    /// edge. ZInput.GetButton returns false for unknown names, so a typo can only disable
+    /// the combo; that case is reported once by the validation below.
+    /// </summary>
+    private bool GamepadToggleDown()
+    {
+        string raw = GamepadToggleButtons.Value;
+        if (!string.Equals(raw, _gamepadChordRaw, StringComparison.Ordinal))
+        {
+            _gamepadChordRaw = raw;
+            _gamepadChord = (raw ?? string.Empty)
+                .Split(new[] { ',', '+' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(part => part.Trim())
+                .Where(part => part.Length > 0)
+                .ToArray();
+            _gamepadChordHeldLastFrame = false;
+            _gamepadChordValidated = false;
+        }
+
+        bool allHeld = _gamepadChord.Length > 0;
+        for (int i = 0; allHeld && i < _gamepadChord.Length; i++)
+        {
+            allHeld = ZInput.GetButton(_gamepadChord[i]);
+        }
+
+        bool pressed = allHeld && !_gamepadChordHeldLastFrame;
+        _gamepadChordHeldLastFrame = allHeld;
+
+        // Validate only once the button registry is known to be populated (DynamicButtonConfig
+        // having generated entries proves it): an unknown name would silently never complete
+        // the combo, so at least say so in the log.
+        if (!_gamepadChordValidated && DynamicButtonConfig.CancelEntries.Count > 0)
+        {
+            _gamepadChordValidated = true;
+            foreach (string button in _gamepadChord)
+            {
+                if (!DynamicButtonConfig.IsRegisteredButton(button))
+                {
+                    LogStatic(
+                        $"Gamepad toggle: ZInput has no button named \"{button}\" - it can never complete the combo. Check [Gamepad] Toggle auto-attack buttons."
+                    );
+                }
+            }
+        }
+
+        return pressed;
+    }
+
     private void OnDestroy()
     {
         _harmony?.UnpatchSelf();
@@ -191,12 +273,25 @@ public class ToggleAutoAttack : BaseUnityPlugin
 }
 
 /// <summary>
-/// Generates one ConfigEntry&lt;bool&gt; per real Valheim input button - a checkbox under
-/// "CancelButtons" and one under "PauseButtons" - instead of a free-text comma-separated list.
+/// Generates one ConfigEntry&lt;bool&gt; per real Valheim input button, split into
+/// device-specific sections - "Keyboard cancel buttons"/"Keyboard pause buttons" for
+/// keyboard/mouse and "Gamepad cancel buttons"/"Gamepad pause buttons" for the controller -
+/// instead of a free-text comma-separated list.
+///
+/// Device split uses ButtonDef.Source (the same classification ClearGamepadButtons uses,
+/// derived from the binding path containing "Gamepad"). Keyboard/mouse buttons are filtered
+/// by ZInput's own Rebindable flag; gamepad buttons can't be - Valheim registers every Joy
+/// binding with rebindable: false (controller buttons aren't rebindable in its settings) -
+/// so instead every Gamepad-source button is taken, generic physical ones (JoyButtonA,
+/// JoyLTrigger, JoyLStickUp, ...) included, mirroring how the keyboard side exposes every
+/// real player-facing action.
+///
 /// Button names are read via reflection from ZInput's private m_buttons dictionary rather than
-/// hardcoded, so the list always matches whatever this game version (or another mod) actually
-/// registers. Only Rebindable buttons are included, to filter out internal/system-only entries
-/// and keep the config to real player-facing actions.
+/// hardcoded, so the lists always match whatever this game version (or another mod) actually
+/// registers. Note the Joy set reflects the controller layout active at startup
+/// (Classic/Alternative1/Alternative2 register overlapping but not identical aliases);
+/// entries for names missing from the current layout simply read false, and restarting the
+/// game after a layout change regenerates the rest.
 /// </summary>
 internal static class DynamicButtonConfig
 {
@@ -208,6 +303,13 @@ internal static class DynamicButtonConfig
     private static readonly FieldRef<ZInput, Dictionary<string, ZInput.ButtonDef>> ButtonsRef =
         AccessTools.FieldRefAccess<ZInput, Dictionary<string, ZInput.ButtonDef>>("m_buttons");
 
+    /// <summary>True if ZInput currently registers a button with this exact name.</summary>
+    public static bool IsRegisteredButton(string name)
+    {
+        ZInput instance = ZInput.instance;
+        return instance != null && ButtonsRef(instance).ContainsKey(name);
+    }
+
     public static void Generate(ConfigFile config)
     {
         if (CancelEntries.Count > 0)
@@ -217,29 +319,45 @@ internal static class DynamicButtonConfig
         if (instance == null)
             return; // too early - ZInput not constructed yet
 
-        IEnumerable<string> names = ButtonsRef
+        IEnumerable<ZInput.ButtonDef> buttons = ButtonsRef
             .Invoke(instance)
-            .Values.Where(b => b.Rebindable) // keep only real player-facing actions
-            .Select(b => b.Name)
-            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase);
+            .Values.Where(b => b.Rebindable || b.Source == ZInput.InputSource.Gamepad)
+            .OrderBy(b => b.Name, StringComparer.OrdinalIgnoreCase);
 
-        foreach (string name in names)
+        foreach (ZInput.ButtonDef button in buttons)
         {
+            string name = button.Name;
+            bool gamepad = button.Source == ZInput.InputSource.Gamepad;
             string label = DescribeButton(instance, name);
+            string cancelSection = gamepad
+                ? "Gamepad cancel buttons"
+                : "Keyboard cancel buttons";
+            string pauseSection = gamepad ? "Gamepad pause buttons" : "Keyboard pause buttons";
 
-            bool cancelDefaultValue =
-                name
-                is "Attack"
-                    or "SecondaryAttack"
-                    or "Block"
-                    or "Use"
-                    or "Crouch"
-                    or "AltDodge"
-                    or "AutoRun"
-                    or "Sit";
+            // Gamepad defaults mirror the keyboard ones with two deliberate gaps: JoyDodge
+            // stays false because it shares its physical button with JoyJump on the classic
+            // layout (pressing jump to pause would instead cancel), and there is no
+            // single-button gamepad equivalent of AutoRun to mirror.
+            bool cancelDefaultValue = gamepad
+                ? name
+                    is "JoyAttack"
+                        or "JoySecondaryAttack"
+                        or "JoyBlock"
+                        or "JoyUse"
+                        or "JoyCrouch"
+                        or "JoySit"
+                : name
+                    is "Attack"
+                        or "SecondaryAttack"
+                        or "Block"
+                        or "Use"
+                        or "Crouch"
+                        or "AltDodge"
+                        or "AutoRun"
+                        or "Sit";
 
             CancelEntries[name] = config.Bind(
-                "Cancel buttons",
+                cancelSection,
                 name,
                 cancelDefaultValue,
                 $"Pressing {label} fully cancels continuous attack."
@@ -249,21 +367,31 @@ internal static class DynamicButtonConfig
             // Attack through the ZInput.GetButton patch, so AnyHeld would read back the
             // forced value while evaluating the pause state. That makes Paused depend on
             // its own previous-frame value and the toggle would flicker on/off every frame.
-            if (name == "Attack")
+            // "JoyAttack" never reads the forced value (only "Attack" is faked), but it is
+            // skipped too so both devices keep the same pause set.
+            if (name == "Attack" || name == "JoyAttack")
                 continue;
 
-            bool pauseDefaultValue =
-                name
-                is "SecondaryAttack"
-                    or "Jump"
-                    or "Block"
-                    or "Forward"
-                    or "Left"
-                    or "Backward"
-                    or "Right";
+            bool pauseDefaultValue = gamepad
+                ? name
+                    is "JoySecondaryAttack"
+                        or "JoyJump"
+                        or "JoyBlock"
+                        or "JoyLStickUp"
+                        or "JoyLStickDown"
+                        or "JoyLStickLeft"
+                        or "JoyLStickRight"
+                : name
+                    is "SecondaryAttack"
+                        or "Jump"
+                        or "Block"
+                        or "Forward"
+                        or "Left"
+                        or "Backward"
+                        or "Right";
 
             PauseEntries[name] = config.Bind(
-                "Pause buttons",
+                pauseSection,
                 name,
                 pauseDefaultValue,
                 $"Holding {label} temporarily pauses continuous attack; it resumes automatically on release."
@@ -271,7 +399,7 @@ internal static class DynamicButtonConfig
         }
 
         ToggleAutoAttack.LogStatic(
-            $"Generated {CancelEntries.Count} cancel/pause button entries from ZInput."
+            $"Generated {CancelEntries.Count} cancel / {PauseEntries.Count} pause button entries from ZInput (keyboard + gamepad)."
         );
     }
 
@@ -417,6 +545,10 @@ internal static class AutoAttackState
 /// for cancellation - read a completely separate, independently-tracked state
 /// (ButtonDef.Pressed/Released vs Held in ZInput.cs), so a genuine manual click is always
 /// detected correctly regardless of this patch.
+///
+/// Gamepad players need no second patch: PlayerController computes the attack hold as
+/// GetButton("Attack") || GetButton("JoyAttack"), so the single faked "Attack" alone makes
+/// the gamepad input path see a held attack too.
 /// </summary>
 [HarmonyPatch(typeof(ZInput), nameof(ZInput.GetButton), new Type[] { typeof(string) })]
 internal static class ZInput_GetButton_ForceAttackHold
