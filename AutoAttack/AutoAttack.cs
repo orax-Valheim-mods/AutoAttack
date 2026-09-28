@@ -53,15 +53,12 @@ public class AutoAttack : BaseUnityPlugin
             "Keyboard",
             "Toggle auto-attack key",
             new KeyboardShortcut(KeyCode.Mouse1, KeyCode.LeftAlt),
-            "Keyboard key combination that starts/stops continuous attacking (equivalent to holding down the attack button)."
+            "Keyboard key combination that starts/stops continuous attacking (equivalent to holding down the attack button). Written as Unity KeyCode names - first the key to press, then the modifiers held with it, separated by + or , (default Mouse1 + LeftAlt). Names are case-sensitive (Mouse1, not mouse1), and the combination only fires while no other keyboard key is held (mouse buttons don't count). Mouse buttons: Mouse0 (left) to Mouse6. Full list of key names: https://docs.unity3d.com/6000.0/Documentation/ScriptReference/KeyCode.html"
         );
 
-        GamepadToggleButtons = Config.Bind(
-            "Gamepad",
-            "Toggle auto-attack buttons",
-            "JoyLBumper, JoyRBumper",
-            "Gamepad buttons that must all be held together to start/stop continuous attacking, as comma or plus separated ZInput button names (JoyLBumper, JoyRBumper = L1 + R1 by default). The combo fires on the press that completes it, like the keyboard combination. Leave empty to disable the gamepad toggle."
-        );
+        // [Gamepad] "Toggle auto-attack buttons" is bound in DynamicButtonConfig.Generate
+        // instead of here: its description must enumerate the button names ZInput actually
+        // registers, and Awake always runs before ZInput.Initialize has created them.
 
         CancelOnWeaponChange = Config.Bind(
             "General",
@@ -150,10 +147,7 @@ public class AutoAttack : BaseUnityPlugin
 
         bool justToggled = false;
 
-        if (
-            !Minimap.InTextInput()
-            && (ToggleKey.Value.IsDown() || gamepadToggleDown)
-        )
+        if (!Minimap.InTextInput() && (ToggleKey.Value.IsDown() || gamepadToggleDown))
         {
             bool active = AutoAttackState.Toggle();
             ShowMessage(active ? MessageOn.Value : MessageOff.Value);
@@ -224,6 +218,9 @@ public class AutoAttack : BaseUnityPlugin
     /// </summary>
     private bool GamepadToggleDown()
     {
+        if (GamepadToggleButtons == null)
+            return false; // not bound yet - DynamicButtonConfig.Generate does it once ZInput exists
+
         string raw = GamepadToggleButtons.Value;
         if (!string.Equals(raw, _gamepadChordRaw, StringComparison.Ordinal))
         {
@@ -319,19 +316,32 @@ internal static class DynamicButtonConfig
         if (instance == null)
             return; // too early - ZInput not constructed yet
 
-        IEnumerable<ZInput.ButtonDef> buttons = ButtonsRef
+        List<ZInput.ButtonDef> buttons = ButtonsRef
             .Invoke(instance)
             .Values.Where(b => b.Rebindable || b.Source == ZInput.InputSource.Gamepad)
-            .OrderBy(b => b.Name, StringComparer.OrdinalIgnoreCase);
+            .OrderBy(b => b.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // Bound here rather than in the plugin's Awake because its description enumerates
+        // the gamepad button names ZInput actually registers, and Awake always runs before
+        // ZInput.Initialize (m_buttons still empty there). BepInEx adopts a value already
+        // present in the cfg file on Bind, so an edited combo survives the late bind.
+        if (AutoAttack.GamepadToggleButtons == null)
+        {
+            AutoAttack.GamepadToggleButtons = config.Bind(
+                "Gamepad",
+                "Toggle auto-attack buttons",
+                "JoyLBumper, JoyRBumper",
+                BuildGamepadChordDescription(buttons)
+            );
+        }
 
         foreach (ZInput.ButtonDef button in buttons)
         {
             string name = button.Name;
             bool gamepad = button.Source == ZInput.InputSource.Gamepad;
             string label = DescribeButton(instance, name);
-            string cancelSection = gamepad
-                ? "Gamepad cancel buttons"
-                : "Keyboard cancel buttons";
+            string cancelSection = gamepad ? "Gamepad cancel buttons" : "Keyboard cancel buttons";
             string pauseSection = gamepad ? "Gamepad pause buttons" : "Keyboard pause buttons";
 
             // Gamepad defaults mirror the keyboard ones with two deliberate gaps: JoyDodge
@@ -360,7 +370,9 @@ internal static class DynamicButtonConfig
                 cancelSection,
                 name,
                 cancelDefaultValue,
-                $"Pressing {label} fully cancels continuous attack."
+                gamepad
+                    ? $"Pressing {label} fully cancels continuous attack. Raw name \"{name}\", also usable in [Gamepad] Toggle auto-attack buttons."
+                    : $"Pressing {label} fully cancels continuous attack."
             );
 
             // "Attack" is deliberately never a pause button: the toggle itself fakes a held
@@ -394,13 +406,75 @@ internal static class DynamicButtonConfig
                 pauseSection,
                 name,
                 pauseDefaultValue,
-                $"Holding {label} temporarily pauses continuous attack; it resumes automatically on release."
+                gamepad
+                    ? $"Holding {label} temporarily pauses continuous attack; it resumes automatically on release. Raw name \"{name}\", also usable in [Gamepad] Toggle auto-attack buttons."
+                    : $"Holding {label} temporarily pauses continuous attack; it resumes automatically on release."
             );
         }
 
         AutoAttack.LogStatic(
             $"Generated {CancelEntries.Count} cancel / {PauseEntries.Count} pause button entries from ZInput (keyboard + gamepad)."
         );
+    }
+
+    /// <summary>
+    /// Description for the free-text [Gamepad] chord: standard explanation plus the complete
+    /// list of gamepad button names this game version registers. There is no hardcoded list
+    /// anywhere in ZInput - it varies with game version, controller layout active at startup
+    /// and platform - so the description is built from m_buttons itself, wrapped over several
+    /// lines (BepInEx turns embedded newlines into "## " comment lines in the cfg file).
+    /// </summary>
+    private static string BuildGamepadChordDescription(List<ZInput.ButtonDef> buttons)
+    {
+        string[] gamepadNames = buttons
+            .Where(b => b.Source == ZInput.InputSource.Gamepad)
+            .Select(b => b.Name)
+            .ToArray();
+
+        string text =
+            "Gamepad buttons that must all be held together to start/stop continuous attacking, "
+            + "as comma or plus separated ZInput button names (default JoyLBumper, JoyRBumper = L1 + R1). "
+            + "The combo fires on the press that completes it, like the keyboard combination. "
+            + "Leave empty to disable the gamepad toggle.\n";
+
+        if (gamepadNames.Length == 0)
+            return text; // defensive: no gamepad button registered - keep the plain description
+
+        return text
+            + "\nAll button names available in this game, generated from ZInput at startup "
+            + "(controller layout: "
+            + ZInput.InputLayout
+            + "; restart the game after changing the layout). "
+            + "Each name is also listed with its in-game label and current binding under [Gamepad cancel buttons]:\n"
+            + WrapNameList(gamepadNames);
+    }
+
+    /// <summary>Joins button names with ", " over lines of at most ~100 characters.</summary>
+    private static string WrapNameList(string[] names)
+    {
+        var lines = new List<string>();
+        string current = null;
+        int length = 0;
+
+        foreach (string name in names)
+        {
+            int added = name.Length + (current != null ? 2 : 0);
+            if (current != null && length + added > 100)
+            {
+                lines.Add(current);
+                current = null;
+                length = 0;
+                added = name.Length;
+            }
+
+            current = current == null ? name : current + ", " + name;
+            length += added;
+        }
+
+        if (current != null)
+            lines.Add(current);
+
+        return string.Join("\n", lines);
     }
 
     /// <summary>
