@@ -3,8 +3,8 @@
     <PropertyGroup>
         <OutputType>Library</OutputType>
         <TargetFramework>net48</TargetFramework>
-        <RootNamespace>ToggleAutoAttack</RootNamespace>
-        <AssemblyName>ToggleAutoAttack</AssemblyName>
+        <RootNamespace>AutoAttack</RootNamespace>
+        <AssemblyName>AutoAttack</AssemblyName>
         <FileAlignment>512</FileAlignment>
         <Deterministic>true</Deterministic>
         <LangVersion>10</LangVersion>
@@ -49,7 +49,7 @@
 
     <PropertyGroup>
         <VALHEIM_MANAGED>$(VALHEIM_INSTALL)/valheim_Data/Managed</VALHEIM_MANAGED>
-        <UNITY_FOLDER>$(SolutionDir)ToggleAutoAttackUnity</UNITY_FOLDER>
+        <UNITY_FOLDER>$(SolutionDir)AutoAttackUnity</UNITY_FOLDER>
     </PropertyGroup>
 
     <Target Name="CopyToUnity">

@@ -10,13 +10,13 @@ using HarmonyLib;
 using UnityEngine;
 using static HarmonyLib.AccessTools;
 
-namespace ToggleAutoAttack;
+namespace AutoAttack;
 
 [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
-public class ToggleAutoAttack : BaseUnityPlugin
+public class AutoAttack : BaseUnityPlugin
 {
-    public const string PluginGuid = "orax.ToggleAutoAttack";
-    public const string PluginName = "ToggleAutoAttack";
+    public const string PluginGuid = "orax.AutoAttack";
+    public const string PluginName = "AutoAttack";
     public const string PluginVersion = "0.1.0";
 
     public static ConfigEntry<bool> Enabled;
@@ -30,7 +30,7 @@ public class ToggleAutoAttack : BaseUnityPlugin
     public static ConfigEntry<string> MessageCancelled;
     public static ConfigEntry<string> MessageWeaponChanged;
 
-    internal static ToggleAutoAttack Instance;
+    internal static AutoAttack Instance;
 
     private static ManualLogSource _log;
     private Harmony _harmony;
@@ -398,7 +398,7 @@ internal static class DynamicButtonConfig
             );
         }
 
-        ToggleAutoAttack.LogStatic(
+        AutoAttack.LogStatic(
             $"Generated {CancelEntries.Count} cancel / {PauseEntries.Count} pause button entries from ZInput (keyboard + gamepad)."
         );
     }
@@ -426,7 +426,7 @@ internal static class DynamicButtonConfig
         }
         catch (Exception e)
         {
-            ToggleAutoAttack.LogStatic($"Could not localize button \"{name}\": {e.Message}");
+            AutoAttack.LogStatic($"Could not localize button \"{name}\": {e.Message}");
         }
 
         string boundKey = null;
@@ -445,7 +445,7 @@ internal static class DynamicButtonConfig
         }
         catch (Exception e)
         {
-            ToggleAutoAttack.LogStatic($"Could not read bound key for \"{name}\": {e.Message}");
+            AutoAttack.LogStatic($"Could not read bound key for \"{name}\": {e.Message}");
         }
 
         bool hasTranslation = !string.IsNullOrEmpty(translated) && translated != name;
@@ -491,9 +491,9 @@ internal static class ZInput_Initialize_GenerateButtonConfig
 {
     private static void Postfix()
     {
-        if (ToggleAutoAttack.Instance != null)
+        if (AutoAttack.Instance != null)
         {
-            DynamicButtonConfig.Generate(ToggleAutoAttack.Instance.Config);
+            DynamicButtonConfig.Generate(AutoAttack.Instance.Config);
         }
     }
 }
