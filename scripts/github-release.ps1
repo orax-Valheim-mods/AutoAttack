@@ -101,14 +101,31 @@ function Find-Release([string]$TagName) {
 $existing = Find-Release $tag
 $releaseExists = [bool]$existing
 
+# --- Release notes -----------------------------------------------------------
+# gh's --generate-notes appends a "**Full Changelog**: <url>" line, which must
+# not appear in the release message: fetch GitHub's notes via the API, drop
+# that line and pass the result with --notes-file.
+function Get-ReleaseNotes([string]$TagName, [string]$Target) {
+    $out = @(gh api -X POST "repos/$repo/releases/generate-notes" -f "tag_name=$TagName" -f "target_commitish=$Target")
+    if ($LASTEXITCODE -ne 0) { Fail "failed to generate release notes (exit $LASTEXITCODE)" }
+    $gen = ($out -join "`n") | ConvertFrom-Json
+    $kept = @(([string]$gen.body) -split "`n" | Where-Object { $_ -notmatch '^(\*\*)?Full Changelog(\*\*)?:' })
+    return (@($kept) -join "`n").TrimEnd()
+}
+
 # --- Commands (checked or executed) ----------------------------------------
 $pushArgs = @("push", "origin", $branch)
+$notesFile = $null
 if ($releaseExists) {
     $ghArgs = @("release", "upload", $tag, $zip, "--clobber", "--repo", $repo)
     $action = "update release $tag (re-upload zip)"
 }
 else {
-    $ghArgs = @("release", "create", $tag, $zip, "--title", $tag, "--generate-notes", "--target", $branch, "--draft", "--repo", $repo)
+    # Generated here (and not only when executing) so the dry run exercises the API too.
+    $notes = Get-ReleaseNotes $tag $branch
+    $notesFile = Join-Path ([System.IO.Path]::GetTempPath()) "AutoAttack-release-notes.md"
+    [System.IO.File]::WriteAllText($notesFile, ($notes + "`r`n"), [System.Text.UTF8Encoding]::new($false))
+    $ghArgs = @("release", "create", $tag, $zip, "--title", $tag, "--notes-file", $notesFile, "--target", $branch, "--draft", "--repo", $repo)
     $action = "create DRAFT $tag"
 }
 
@@ -135,6 +152,7 @@ else {
 }
 & gh @ghArgs
 if ($LASTEXITCODE -ne 0) { Fail "gh release $($ghArgs[1]) failed (exit $LASTEXITCODE)" }
+if ($notesFile) { Remove-Item $notesFile -Force -ErrorAction SilentlyContinue }
 
 # --- Link to the release (drafts use the edit URL; fall back to the tag URL)
 $url = (Find-Release $tag).html_url
