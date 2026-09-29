@@ -95,7 +95,8 @@
     </Target>
 
     <!-- Runs after publish.ps1 has built the Thunderstore zip: pushes the branch and
-         creates (or updates) the GitHub release for the manifest version.
+         creates (as draft) or updates the GitHub release for the manifest version,
+         then opens the release page in the browser.
          Skip with: dotnet build -c Release -p:SkipGitHubRelease=true -->
     <Target Name="GitHubRelease" AfterTargets="JotunnPostBuildTaskWin" Condition=" '$(OS)' == 'Windows_NT' AND '$(Configuration)' == 'Release' AND '$(SkipGitHubRelease)' != 'true' ">
         <Exec Command="powershell.exe -ExecutionPolicy RemoteSigned -File &quot;$(SolutionDir)scripts/github-release.ps1&quot; -ZipPath &quot;$(TargetDir.TrimEnd('\'))\$(TargetName).zip&quot; -ProjectPath &quot;$(ProjectDir.TrimEnd('\'))&quot;" />

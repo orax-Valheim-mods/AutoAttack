@@ -81,9 +81,25 @@ $repo = "$($Matches[1])/$($Matches[2])"
 gh repo view $repo | Out-Null
 if ($LASTEXITCODE -ne 0) { Fail "repository $repo not found on GitHub (or no access with this gh account)" }
 
-# --- Does the release already exist? ---------------------------------------
-gh release view $tag --repo $repo | Out-Null
-$releaseExists = ($LASTEXITCODE -eq 0)
+# --- Does a release (or draft) already exist for this tag? ------------------
+# `gh release view` can miss drafts, and a jq expression containing quotes is
+# mangled by Windows PowerShell 5.1 native argument passing, so fetch the raw
+# JSON and filter in PowerShell instead. The list includes drafts for accounts
+# with push access; html_url works for drafts too (the /releases/tag/ URL
+# needs the tag to exist, i.e. a published release).
+function Find-Release([string]$TagName) {
+    $out = @(gh api "repos/$repo/releases" --paginate --slurp)
+    if ($LASTEXITCODE -ne 0) { Fail "failed to list releases of $repo (exit $LASTEXITCODE)" }
+    # Two flatten passes: ConvertFrom-Json may or may not unwrap the outer
+    # slurp array, so normalize down to individual release objects.
+    $pages = ($out -join "`n") | ConvertFrom-Json
+    $flat = @($pages | ForEach-Object { $_ } | ForEach-Object { $_ })
+    $found = @($flat | Where-Object { $_.tag_name -eq $TagName }) | Select-Object -First 1
+    return $found
+}
+
+$existing = Find-Release $tag
+$releaseExists = [bool]$existing
 
 # --- Commands (checked or executed) ----------------------------------------
 $pushArgs = @("push", "origin", $branch)
@@ -92,31 +108,44 @@ if ($releaseExists) {
     $action = "update release $tag (re-upload zip)"
 }
 else {
-    $ghArgs = @("release", "create", $tag, $zip, "--title", $tag, "--generate-notes", "--target", $branch, "--repo", $repo)
-    $action = "create release $tag"
+    $ghArgs = @("release", "create", $tag, $zip, "--title", $tag, "--generate-notes", "--target", $branch, "--draft", "--repo", $repo)
+    $action = "create DRAFT $tag"
 }
 
 if ($DryRun) {
     Write-Host "[DRY RUN] version=$version branch=$branch repo=$repo action=$action" -ForegroundColor Cyan
     Write-Host "[DRY RUN] git $($pushArgs -join ' ')" -ForegroundColor Cyan
     Write-Host "[DRY RUN] gh $($ghArgs -join ' ')" -ForegroundColor Cyan
+    Write-Host "[DRY RUN] on creation: open the release page in the browser" -ForegroundColor Cyan
     exit 0
 }
 
-# --- Push so the tag points at code that exists on GitHub -------------------
+# --- Push so the tag can be created from this commit when the draft is published
 Write-Host "Pushing $branch to origin..."
 git push origin $branch
 if ($LASTEXITCODE -ne 0) { Fail "git push failed - pull/rebase first, then rebuild" }
 
-# --- Create or update the release ------------------------------------------
+# --- Create the draft, or update the existing release ----------------------
+$created = -not $releaseExists
 if ($releaseExists) {
     Write-Host "Release $tag already exists - re-uploading zip"
 }
 else {
-    Write-Host "Creating release $tag on $repo"
+    Write-Host "Creating DRAFT release $tag on $repo"
 }
 & gh @ghArgs
 if ($LASTEXITCODE -ne 0) { Fail "gh release $($ghArgs[1]) failed (exit $LASTEXITCODE)" }
 
-Write-Host "OK: https://github.com/$repo/releases/tag/$tag" -ForegroundColor Green
+# --- Link to the release (drafts use the edit URL; fall back to the tag URL)
+$url = (Find-Release $tag).html_url
+if (-not $url) { $url = "https://github.com/$repo/releases/tag/$tag" }
+
+if ($created) {
+    Write-Host "Draft created: $url" -ForegroundColor Green
+    try { Start-Process $url }
+    catch { Write-Host "WARNING: could not open the browser: $_" -ForegroundColor Yellow }
+}
+else {
+    Write-Host "Updated: $url" -ForegroundColor Green
+}
 exit 0
