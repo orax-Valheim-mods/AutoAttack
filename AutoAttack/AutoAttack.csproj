@@ -93,4 +93,11 @@
     <Target Name="JotunnPostBuildTaskUnix" AfterTargets="Build" Condition=" '$(OS)' == 'Unix' ">
         <Exec Command="sh &quot;$(SolutionDir)scripts/publish.sh&quot; --target &quot;$(ConfigurationName)&quot; --target-path &quot;$(TargetDir)&quot; --target-assembly &quot;$(TargetFileName)&quot; --valheim-path &quot;$(VALHEIM_INSTALL)&quot; --deploy-path &quot;$(MOD_DEPLOYPATH)&quot; --project-path &quot;$(ProjectDir)&quot;" />
     </Target>
+
+    <!-- Runs after publish.ps1 has built the Thunderstore zip: pushes the branch and
+         creates (or updates) the GitHub release for the manifest version.
+         Skip with: dotnet build -c Release -p:SkipGitHubRelease=true -->
+    <Target Name="GitHubRelease" AfterTargets="JotunnPostBuildTaskWin" Condition=" '$(OS)' == 'Windows_NT' AND '$(Configuration)' == 'Release' AND '$(SkipGitHubRelease)' != 'true' ">
+        <Exec Command="powershell.exe -ExecutionPolicy RemoteSigned -File &quot;$(SolutionDir)scripts/github-release.ps1&quot; -ZipPath &quot;$(TargetDir.TrimEnd('\'))\$(TargetName).zip&quot; -ProjectPath &quot;$(ProjectDir.TrimEnd('\'))&quot;" />
+    </Target>
 </Project>
