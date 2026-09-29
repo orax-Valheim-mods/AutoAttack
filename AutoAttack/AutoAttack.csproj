@@ -94,6 +94,12 @@
         <Exec Command="sh &quot;$(SolutionDir)scripts/publish.sh&quot; --target &quot;$(ConfigurationName)&quot; --target-path &quot;$(TargetDir)&quot; --target-assembly &quot;$(TargetFileName)&quot; --valheim-path &quot;$(VALHEIM_INSTALL)&quot; --deploy-path &quot;$(MOD_DEPLOYPATH)&quot; --project-path &quot;$(ProjectDir)&quot;" />
     </Target>
 
+    <!-- Regenerates Package/CHANGELOG.md from the git history, before publish.ps1
+         zips the Thunderstore package. -->
+    <Target Name="GenerateChangelog" BeforeTargets="JotunnPostBuildTaskWin" Condition=" '$(OS)' == 'Windows_NT' AND '$(Configuration)' == 'Release' ">
+        <Exec Command="powershell.exe -ExecutionPolicy RemoteSigned -File &quot;$(SolutionDir)scripts/changelog.ps1&quot; -ProjectPath &quot;$(ProjectDir.TrimEnd('\'))&quot;" />
+    </Target>
+
     <!-- Runs after publish.ps1 has built the Thunderstore zip: pushes the branch and
          creates (as draft) or updates the GitHub release for the manifest version,
          then opens the release page in the browser.
