@@ -1,0 +1,116 @@
+name: Upload release to Thunderstore
+
+# Fires when a release is published - i.e. exactly when the "Draft" flag is
+# removed on GitHub - and uploads the release zip (the same asset the Nexus Mods
+# workflow sends) as a Thunderstore package.
+#
+# One-off setup:
+#   gh variable set THUNDERSTORE_NAMESPACE --body 'orax'
+#   gh variable set THUNDERSTORE_COMMUNITY --body 'valheim'
+#   gh secret set THUNDERSTORE_API_TOKEN   # Thunderstore > Settings > Teams >
+#                                          # [team] > Service Accounts token
+#
+# The version always comes from the release tag, and scripts/thunderstore-config.ps1
+# refuses to run when the tag, Package/manifest.json and the manifest inside the
+# zip disagree, so an old asset cannot be published under a new version.
+on:
+  release:
+    types: [published]
+
+  # Re-run an upload without publishing a new release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to upload (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  TCLI_VERSION: "0.2.4"
+  ASSET: "AutoAttack.zip"
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check configuration
+        run: |
+          missing=0
+          if [ -z "${{ vars.THUNDERSTORE_NAMESPACE }}" ]; then
+            echo "::error::Repository variable THUNDERSTORE_NAMESPACE is not set (gh variable set THUNDERSTORE_NAMESPACE --body 'orax')"
+            missing=1
+          fi
+          if [ -z "${{ vars.THUNDERSTORE_COMMUNITY }}" ]; then
+            echo "::error::Repository variable THUNDERSTORE_COMMUNITY is not set (gh variable set THUNDERSTORE_COMMUNITY --body 'valheim')"
+            missing=1
+          fi
+          if [ -z "${{ secrets.THUNDERSTORE_API_TOKEN }}" ]; then
+            echo "::error::Secret THUNDERSTORE_API_TOKEN is not set (gh secret set THUNDERSTORE_API_TOKEN)"
+            missing=1
+          fi
+          exit $missing
+
+      - uses: actions/checkout@v4
+
+      - name: Resolve the tag
+        id: tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$EVENT_NAME" = "release" ]; then
+            TAG="$RELEASE_TAG"
+          else
+            TAG="$INPUT_TAG"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::No tag to publish"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      # "v0.1.0" -> "0.1.0"
+      - name: Derive the version from the tag
+        id: meta
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download the release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          gh release download "$TAG" --pattern "$ASSET" --dir dist
+          ls -l dist
+
+      - name: Install tcli
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/tcli.tar.gz" \
+            "https://github.com/thunderstore-io/thunderstore-cli/releases/download/${TCLI_VERSION}/tcli-${TCLI_VERSION}-linux-x64.tar.gz"
+          tar -xzf "$RUNNER_TEMP/tcli.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/tcli-${TCLI_VERSION}-linux-x64" >> "$GITHUB_PATH"
+
+      - name: Generate thunderstore.toml
+        shell: pwsh
+        env:
+          NAMESPACE: ${{ vars.THUNDERSTORE_NAMESPACE }}
+          COMMUNITY: ${{ vars.THUNDERSTORE_COMMUNITY }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          ./scripts/thunderstore-config.ps1 `
+            -Namespace $env:NAMESPACE `
+            -Community $env:COMMUNITY `
+            -Version $env:VERSION `
+            -ZipPath "dist/$env:ASSET" `
+            -OutFile thunderstore.toml
+
+      - name: Publish to Thunderstore
+        env:
+          TOKEN: ${{ secrets.THUNDERSTORE_API_TOKEN }}
+        run: |
+          tcli publish --file "dist/$ASSET" --token "$TOKEN"
