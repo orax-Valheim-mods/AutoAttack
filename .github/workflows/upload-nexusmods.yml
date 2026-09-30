@@ -18,12 +18,12 @@ jobs:
       - name: Check configuration
         run: |
           missing=0
-          if [ -z "${{ vars.NEXUS_FILE_ID }}" ]; then
-            echo "::error::Repository variable NEXUS_FILE_ID is not set (gh variable set NEXUS_FILE_ID --body '<file id>')"
+          if [ -z "${{ vars.NEXUSMODS_FILE_ID }}" ]; then
+            echo "::error::Repository variable NEXUSMODS_FILE_ID is not set (gh variable set NEXUSMODS_FILE_ID --body '<file id>')"
             missing=1
           fi
-          if [ -z "${{ vars.NEXUS_MOD_ID }}" ]; then
-            echo "::error::Repository variable NEXUS_MOD_ID is not set (gh variable set NEXUS_MOD_ID --body '<mod id>')"
+          if [ -z "${{ vars.NEXUSMODS_MOD_ID }}" ]; then
+            echo "::error::Repository variable NEXUSMODS_MOD_ID is not set (gh variable set NEXUSMODS_MOD_ID --body '<mod id>')"
             missing=1
           fi
           if [ -z "${{ secrets.NEXUSMODS_API_KEY }}" ]; then
@@ -68,8 +68,8 @@ jobs:
         uses: Nexus-Mods/upload-action@v1.0.0-beta.10
         with:
           api_key: ${{ secrets.NEXUSMODS_API_KEY }}
-          file_id: ${{ vars.NEXUS_FILE_ID }}
-          mod_id: ${{ vars.NEXUS_MOD_ID }}
+          file_id: ${{ vars.NEXUSMODS_FILE_ID }}
+          mod_id: ${{ vars.NEXUSMODS_MOD_ID }}
           filename: dist/AutoAttack.zip
           version: ${{ steps.meta.outputs.version }}
           changelog: ${{ steps.changelog.outputs.notes }}
