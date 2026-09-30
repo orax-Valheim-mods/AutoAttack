@@ -45,4 +45,4 @@ Notes:
 
 ## Misc
 
-Source code: https://github.com/orax-Valheim-mods/AutoAttack
+Source code: [GitHub repository](https://github.com/orax-Valheim-mods/AutoAttack)
