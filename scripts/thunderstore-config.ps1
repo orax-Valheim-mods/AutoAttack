@@ -28,7 +28,8 @@
     Version to publish, x.y.z (the release tag without its leading "v").
 
 .PARAMETER ManifestPath
-    Manifest of the package. Defaults to <repo>/AutoAttack/Package/manifest.json.
+    Manifest of the package. When omitted, the script looks for a
+    <something>/Package/manifest.json in the repository (there is normally only one).
 
 .PARAMETER ZipPath
     Optional release asset to cross-check (name and version must match the manifest).
@@ -54,7 +55,7 @@ param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string] $Version,
 
-    [string] $ManifestPath = (Join-Path (Split-Path -Parent $PSScriptRoot) (Join-Path 'AutoAttack' (Join-Path 'Package' 'manifest.json'))),
+    [string] $ManifestPath = '',
 
     [string] $ZipPath = '',
 
@@ -70,6 +71,19 @@ $ErrorActionPreference = 'Stop'
 function Fail([string]$Message) {
     Write-Host "ERROR: $Message" -ForegroundColor Red
     exit 1
+}
+
+# --- Locate the package manifest when it was not given -----------------------
+if (-not $ManifestPath) {
+    $repoRoot = Split-Path -Parent $PSScriptRoot
+    $candidates = @(Get-ChildItem -Path $repoRoot -Recurse -File -Filter 'manifest.json' -Depth 4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.Directory.Name -eq 'Package' })
+    if ($candidates.Count -eq 0) { Fail "no 'Package/manifest.json' found under $repoRoot (pass -ManifestPath)." }
+    if ($candidates.Count -gt 1) {
+        Fail ("found several package manifests: " + (($candidates | ForEach-Object { $_.FullName }) -join ', ') + " (pass -ManifestPath).")
+    }
+    $ManifestPath = $candidates[0].FullName
+    Write-Host "Package manifest: $ManifestPath" -ForegroundColor DarkGray
 }
 
 function ConvertTo-TomlString([string]$Value) {
