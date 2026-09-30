@@ -77,6 +77,9 @@ if ($repoUrl -notmatch 'github\.com[:/]([^/]+)/([^/]+?)(\.git)?$') {
     Fail "origin is not a GitHub remote: $repoUrl"
 }
 $repo = "$($Matches[1])/$($Matches[2])"
+# Page opened in the browser: a draft has no usable tag URL before publishing,
+# while the releases list always shows it (drafts included).
+$listUrl = "https://github.com/$repo/releases"
 
 gh repo view $repo | Out-Null
 if ($LASTEXITCODE -ne 0) { Fail "repository $repo not found on GitHub (or no access with this gh account)" }
@@ -133,7 +136,7 @@ if ($DryRun) {
     Write-Host "[DRY RUN] version=$version branch=$branch repo=$repo action=$action" -ForegroundColor Cyan
     Write-Host "[DRY RUN] git $($pushArgs -join ' ')" -ForegroundColor Cyan
     Write-Host "[DRY RUN] gh $($ghArgs -join ' ')" -ForegroundColor Cyan
-    Write-Host "[DRY RUN] on creation: open the release page in the browser" -ForegroundColor Cyan
+    Write-Host "[DRY RUN] on creation: open $listUrl in the browser" -ForegroundColor Cyan
     exit 0
 }
 
@@ -154,16 +157,13 @@ else {
 if ($LASTEXITCODE -ne 0) { Fail "gh release $($ghArgs[1]) failed (exit $LASTEXITCODE)" }
 if ($notesFile) { Remove-Item $notesFile -Force -ErrorAction SilentlyContinue }
 
-# --- Link to the release (drafts use the edit URL; fall back to the tag URL)
-$url = (Find-Release $tag).html_url
-if (-not $url) { $url = "https://github.com/$repo/releases/tag/$tag" }
-
+# --- Open the releases page (a draft has no usable tag URL before publishing)
 if ($created) {
-    Write-Host "Draft created: $url" -ForegroundColor Green
-    try { Start-Process $url }
+    Write-Host "Draft created: $listUrl" -ForegroundColor Green
+    try { Start-Process $listUrl }
     catch { Write-Host "WARNING: could not open the browser: $_" -ForegroundColor Yellow }
 }
 else {
-    Write-Host "Updated: $url" -ForegroundColor Green
+    Write-Host "Updated: $listUrl" -ForegroundColor Green
 }
 exit 0
