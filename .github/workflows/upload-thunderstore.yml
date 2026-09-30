@@ -1,23 +1,18 @@
 name: Upload release to Thunderstore
 
-# Fires when a release is published - i.e. exactly when the "Draft" flag is
-# removed on GitHub - and uploads the release zip (the same asset the Nexus Mods
-# workflow sends) as a Thunderstore package.
+# Publishes the release zip asset to Thunderstore using the community action.
+# Setup (one-off):
+#   gh variable set THUNDERSTORE_NAMESPACE --body 'orax'    -R <owner>/<repo>
+#   gh variable set THUNDERSTORE_COMMUNITY  --body 'valheim' -R <owner>/<repo>
+#   gh secret set THUNDERSTORE_API_TOKEN                    -R <owner>/<repo>
 #
-# One-off setup:
-#   gh variable set THUNDERSTORE_NAMESPACE --body 'orax'
-#   gh variable set THUNDERSTORE_COMMUNITY --body 'valheim'
-#   gh secret set THUNDERSTORE_API_TOKEN   # Thunderstore > Settings > Teams >
-#                                          # [team] > Service Accounts token
-#
-# The version always comes from the release tag, and scripts/thunderstore-config.ps1
-# refuses to run when the tag, Package/manifest.json and the manifest inside the
-# zip disagree, so an old asset cannot be published under a new version.
+# The version is taken from the release tag (v0.1.0 -> 0.1.0).
+# The release asset must be a valid Thunderstore package (manifest.json, icon.png,
+# README.md, plugins/ at root) — this is what the mod's Release packaging produces.
 on:
   release:
     types: [published]
 
-  # Re-run an upload without publishing a new release.
   workflow_dispatch:
     inputs:
       tag:
@@ -28,7 +23,6 @@ permissions:
   contents: read
 
 env:
-  TCLI_VERSION: "0.2.4"
   ASSET: "AutoAttack.zip"
 
 jobs:
@@ -72,7 +66,6 @@ jobs:
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      # "v0.1.0" -> "0.1.0"
       - name: Derive the version from the tag
         id: meta
         env:
@@ -88,29 +81,12 @@ jobs:
           gh release download "$TAG" --pattern "$ASSET" --dir dist
           ls -l dist
 
-      - name: Install tcli
-        run: |
-          curl -fsSL -o "$RUNNER_TEMP/tcli.tar.gz" \
-            "https://github.com/thunderstore-io/thunderstore-cli/releases/download/${TCLI_VERSION}/tcli-${TCLI_VERSION}-linux-x64.tar.gz"
-          tar -xzf "$RUNNER_TEMP/tcli.tar.gz" -C "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/tcli-${TCLI_VERSION}-linux-x64" >> "$GITHUB_PATH"
-
-      - name: Generate thunderstore.toml
-        shell: pwsh
-        env:
-          NAMESPACE: ${{ vars.THUNDERSTORE_NAMESPACE }}
-          COMMUNITY: ${{ vars.THUNDERSTORE_COMMUNITY }}
-          VERSION: ${{ steps.meta.outputs.version }}
-        run: |
-          ./scripts/thunderstore-config.ps1 `
-            -Namespace $env:NAMESPACE `
-            -Community $env:COMMUNITY `
-            -Version $env:VERSION `
-            -ZipPath "dist/$env:ASSET" `
-            -OutFile thunderstore.toml
-
       - name: Publish to Thunderstore
-        env:
-          TOKEN: ${{ secrets.THUNDERSTORE_API_TOKEN }}
-        run: |
-          tcli publish --file "dist/$ASSET" --token "$TOKEN"
+        uses: GreenTF/upload-thunderstore-package@v4.3
+        with:
+          token: ${{ secrets.THUNDERSTORE_API_TOKEN }}
+          namespace: ${{ vars.THUNDERSTORE_NAMESPACE }}
+          community: ${{ vars.THUNDERSTORE_COMMUNITY }}
+          name: AutoAttack
+          version: ${{ steps.meta.outputs.version }}
+          file: dist/${{ env.ASSET }}
