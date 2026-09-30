@@ -1,58 +1,48 @@
-# JötunnModStub
+# AutoAttack
 
-A Valheim mod stub project using [Jötunn](https://github.com/Valheim-Modding/Jotunn) including build tools and a basic Unity project stub.
-There is no actual plugin content included, just a minimum plugin class. 
+Press a key to start continuous attacking — the mod keeps the attack button held for you — and press it again to stop. No more holding the attack button through long fights.
 
-#  Setup Guide
+Client-side only: neither the server nor other players need the mod.
 
-Please see [Jötunn Docs](https://valheim-modding.github.io/Jotunn/guides/overview.html) detailed documentation and setup.
+## Features
 
-### Post Build automations
+- **Toggle on/off** with a keyboard shortcut (default `Mouse1 + LeftAlt`) or a gamepad combo (default `JoyLBumper, JoyRBumper` = L1 + R1).
+- **Pause**: holding a configured button (block, jump, secondary attack, movement by default) temporarily pauses the toggle; it resumes automatically when you release it.
+- **Cancel**: pressing a configured button stops the toggle completely.
+- **Weapon change protection**: automatically cancels when the equipped weapon changes (can be disabled).
+- **Bows**: keeps drawing and releases the shot automatically once fully drawn.
+- **Crossbows**: waits for the reload instead of holding through it.
+- **On-screen messages** for on/off/cancelled, with configurable texts (empty text = hidden) and position.
+- **Per-button configuration**: every input button the game registers gets its own on/off entry, split into keyboard and gamepad sections and generated from the game's own input registry at startup.
+- **Master switch** (`[General] Enabled`) to turn the mod fully off and get vanilla behavior.
 
-Included in this repo is a PowerShell script `publish.ps1`.
-The script is referenced in the project file as a post-build event.
-Depending on the chosen configuration in Visual Studio the script executes the following actions.
+## Installation
 
-### Building Debug
+### Using a mod manager (recommended)
 
-The compiled dll and a dll.mdb debug file are copied to `<ValheimDir>\BepInEx\plugins` (or the path set in MOD_DEPLOYPATH).
+Install via NexusMods r2modman, Gale or the Thunderstore Mod Manager. BepInExPack is installed automatically as a dependency.
 
-### Building Release
+### Manual
 
-A compressed file with the binaries is created in `<JotunnModStub>\Packages`ready for upload to ThunderStore.
-Dont forget to include your information in the manifest.json and to change the project's readme file.
+1. Install [BepInExPack for Valheim](https://thunderstore.io/package/denikson/BepInExPack_Valheim/).
+2. Drop `AutoAttack.dll` into `<Valheim>/BepInEx/plugins/`.
 
-## Developing Assets with Unity
+## Configuration
 
-New Assets can be created with Unity and imported into Valheim using the mod.
-A Unity project is included in this repository under `<JotunnModStub>\JotunnModUnity`.
+Config file: `BepInEx/config/orax.AutoAttack.cfg` — every entry is documented inline.
 
-### Unity Editor Setup
+- `[General]` > Master switch, cancel-on-weapon-change
+- `[Keyboard]` > Toggle shortcut (Unity `KeyCode` names, e.g. `Mouse1 + LeftAlt`)
+- `[Gamepad]` > Toggle combo (ZInput button names, e.g. `JoyLBumper, JoyRBumper`)
+- `[Keyboard cancel buttons]` > `[Gamepad cancel buttons]` > Press to cancel the toggle
+- `[Keyboard pause buttons]` > `[Gamepad pause buttons]` > Hold to pause the toggle
+- `[HUD]`, `[Messages]` > Message display, position and texts
 
-1. [Download](https://public-cdn.cloud.unity3d.com/hub/prod/UnityHubSetup.exe) UnityHub directly from Unity or install it with the Visual Studio Installer via `Individual Components` -> `Visual Studio Tools for Unity`
-2. You will need an Unity account to register your PC and get a free licence. Create the account, login with it in Unity Hub and get your licence via `Settings` -> `Licence Management`
-3. Install Unity Editor version 2022.3.17f
-4. Compile the project. This copies all assemblies into `<JotunnModStub>\JotunnModUnity\Assets\Assemblies`. Don't open Unity yet before this step, it will remove assembly references.
-5. **Warning:** These assembly files are copyrighted material and you can theoretically get into trouble when you distribute them in your github repository. To avoid that there is a .gitignore file in the Unity project folder. Keep that when you clone or copy this repository
-6. Open Unity Hub and add the JotunnModUnity project
-7. Open the project in Unity
-8. Install the `AssetBundle Browser` package in the Unity Editor via `Window`-> `Package Manager` for easy bundle creation
+Notes:
 
-## Debugging
+- The gamepad button list is generated at startup from the game's own input registry and reflects the controller layout active at that moment; restart the game after changing the layout to regenerate it.
+- Unknown button names simply never trigger, and a warning is logged once.
 
-See the Wiki page [Debugging Plugins via IDE](https://github.com/Valheim-Modding/Wiki/wiki/Debugging-Plugins-via-IDE) for more information
+## Misc
 
-## Actions after a game update
-
-When Valheim updates it is likely that parts of the assembly files change.
-If this is the case, the references to the assembly files must be renewed in Visual Studio and Unity.
-
-### Prebuild actions
-
-1. There is a file called DoPrebuild.props included in the solution. When you set its only value to true, Jötunn will automatically generate publicized assemblies for you. Otherwise you have to do this step manually.
-
-### Unity actions
-
-1. Copy all `assembly_*.dll` from `<ValheimDir>\valheim_Data\Managed` into `<JotunnModStub>\JotunnModUnity\Assets\Assemblies`. <br />
-  **Do this directly in the filesystem - don't import the dlls in Unity**.
-2. Go to Unity Editor and press `Ctrl+R`. This reloads all files from the filesystem and "re-imports" the copied dlls into the project.
+Source code: https://github.com/orax-Valheim-mods/AutoAttack
