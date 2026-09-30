@@ -1,0 +1,77 @@
+name: Upload release to Nexus Mods
+
+# Fires when a release is published - i.e. exactly when the "Draft" flag is
+# removed on GitHub - and uploads the release zip as a new file version.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      # The Nexus page must already exist (bootstrap upload done manually once);
+      # its IDs live in repository variables, the API key in a secret.
+      - name: Check configuration
+        run: |
+          missing=0
+          if [ -z "${{ vars.NEXUS_FILE_ID }}" ]; then
+            echo "::error::Repository variable NEXUS_FILE_ID is not set (gh variable set NEXUS_FILE_ID --body '<file id>')"
+            missing=1
+          fi
+          if [ -z "${{ vars.NEXUS_MOD_ID }}" ]; then
+            echo "::error::Repository variable NEXUS_MOD_ID is not set (gh variable set NEXUS_MOD_ID --body '<mod id>')"
+            missing=1
+          fi
+          if [ -z "${{ secrets.NEXUSMODS_API_KEY }}" ]; then
+            echo "::error::Secret NEXUSMODS_API_KEY is not set (gh secret set NEXUSMODS_API_KEY)"
+            missing=1
+          fi
+          exit $missing
+
+      # "v0.1.0" -> "0.1.0"
+      - name: Derive version from the tag
+        id: meta
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download the release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release download "$TAG" --pattern "AutoAttack.zip" --dir dist
+
+      # The zip ships the CHANGELOG.md generated at build time: send this
+      # version's section (Added/Changed/Fixed/Other) as the Nexus changelog.
+      - name: Extract this version's section from CHANGELOG.md
+        id: changelog
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          unzip -p dist/AutoAttack.zip CHANGELOG.md > cl.md 2>/dev/null || true
+          {
+            echo "notes<<CHANGELOG_EOF"
+            awk -v v="$VERSION" '
+              index($0, "## [" v "]") == 1 { found = 1; next }
+              index($0, "## [") == 1 { found = 0 }
+              found
+            ' cl.md
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload to Nexus Mods
+        uses: Nexus-Mods/upload-action@v1.0.0-beta.10
+        with:
+          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
+          file_id: ${{ vars.NEXUS_FILE_ID }}
+          mod_id: ${{ vars.NEXUS_MOD_ID }}
+          filename: dist/AutoAttack.zip
+          version: ${{ steps.meta.outputs.version }}
+          changelog: ${{ steps.changelog.outputs.notes }}
+          archive_existing_version: true
+          update_mod_version: true
