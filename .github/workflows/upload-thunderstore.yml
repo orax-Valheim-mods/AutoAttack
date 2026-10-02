@@ -3,7 +3,7 @@ name: Upload release to Thunderstore
 # Publishes the release zip asset to Thunderstore using the community action.
 # Setup (one-off):
 #   On GitHub, open Settings -> Secrets and variables -> Actions and create the
-#   variables THUNDERSTORE_NAMESPACE ('orax') and THUNDERSTORE_COMMUNITY
+#   variables THUNDERSTORE_NAMESPACE ('nickname') and THUNDERSTORE_COMMUNITY
 #   ('valheim') and the secret THUNDERSTORE_API_TOKEN (Service Account token
 #   from thunderstore.io) that this workflow uses.
 #   The variables and the secret may also be defined at the organization level
@@ -37,15 +37,15 @@ jobs:
         run: |
           missing=0
           if [ -z "${{ vars.THUNDERSTORE_NAMESPACE }}" ]; then
-            echo "::error::Repository variable THUNDERSTORE_NAMESPACE is not set (gh variable set THUNDERSTORE_NAMESPACE --body 'orax')"
+            echo "::error::Repository variable THUNDERSTORE_NAMESPACE is not set (create it in Settings -> Secrets and variables -> Actions)"
             missing=1
           fi
           if [ -z "${{ vars.THUNDERSTORE_COMMUNITY }}" ]; then
-            echo "::error::Repository variable THUNDERSTORE_COMMUNITY is not set (gh variable set THUNDERSTORE_COMMUNITY --body 'valheim')"
+            echo "::error::Repository variable THUNDERSTORE_COMMUNITY is not set (create it in Settings -> Secrets and variables -> Actions)"
             missing=1
           fi
           if [ -z "${{ secrets.THUNDERSTORE_API_TOKEN }}" ]; then
-            echo "::error::Secret THUNDERSTORE_API_TOKEN is not set (gh secret set THUNDERSTORE_API_TOKEN)"
+            echo "::error::Secret THUNDERSTORE_API_TOKEN is not set (create it in Settings -> Secrets and variables -> Actions)"
             missing=1
           fi
           exit $missing
