@@ -1,6 +1,6 @@
 ﻿{
   "name": "AutoAttack",
-  "description": "Toggle continuous attack with a keypress instead of holding the button. Configurable keyboard and gamepad toggles, pause/cancel buttons, on-screen messages, bow and crossbow support. Client-side only.",
+  "description": "Toggle continuous attack with a keypress instead of holding the button.",
   "version_number": "0.1.0",
   "website_url": "https://github.com/orax-Valheim-mods/AutoAttack",
   "dependencies": [
