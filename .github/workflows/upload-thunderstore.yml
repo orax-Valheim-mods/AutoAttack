@@ -86,7 +86,10 @@ jobs:
           ls -l dist
 
       - name: Publish to Thunderstore
-        uses: GreenTF/upload-thunderstore-package@v4.3
+        # Fork of GreenTF/upload-thunderstore-package@v4.3 fixing two bugs:
+        # default categories for other communities (riskofrain2 leftover) and
+        # an empty repository when neither dev nor repo input is set.
+        uses: orax-Valheim-mods/upload-thunderstore-package@main
         with:
           token: ${{ secrets.THUNDERSTORE_API_TOKEN }}
           namespace: ${{ vars.THUNDERSTORE_NAMESPACE }}
