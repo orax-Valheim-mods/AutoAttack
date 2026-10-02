@@ -90,7 +90,5 @@ jobs:
           name: AutoAttack
           version: ${{ steps.meta.outputs.version }}
           file: dist/${{ env.ASSET }}
-          # TEST config: publish to thunderstore.dev with community riskofrain2.
-          # REMOVE these two lines (and use a thunderstore.io token) for production.
-          dev: true
-          categories: Mods
+          # Category must be a slug of the community (list: thunderstore.io/api/experimental/community/valheim/category/)
+          categories: mods
