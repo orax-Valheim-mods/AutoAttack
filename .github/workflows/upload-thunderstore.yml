@@ -2,11 +2,15 @@ name: Upload release to Thunderstore
 
 # Publishes the release zip asset to Thunderstore using the community action.
 # Setup (one-off):
-#   gh variable set THUNDERSTORE_NAMESPACE --body 'orax'    -R <owner>/<repo>
-#   gh variable set THUNDERSTORE_COMMUNITY  --body 'valheim' -R <owner>/<repo>
-#   gh secret set THUNDERSTORE_API_TOKEN                    -R <owner>/<repo>
+#   On GitHub, open Settings -> Secrets and variables -> Actions and create the
+#   variables THUNDERSTORE_NAMESPACE ('orax') and THUNDERSTORE_COMMUNITY
+#   ('valheim') and the secret THUNDERSTORE_API_TOKEN (Service Account token
+#   from thunderstore.io) that this workflow uses.
+#   The variables and the secret may also be defined at the organization level
+#   instead of the repository level: if all mods live in the same GitHub
+#   organization, defining them once there avoids repeating them for every
+#   repository.
 #
-# The version is taken from the release tag (v0.1.0 -> 0.1.0).
 # The release asset must be a valid Thunderstore package (manifest.json, icon.png,
 # README.md, plugins/ at root) — this is what the mod's Release packaging produces.
 on:
