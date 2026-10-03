@@ -1,6 +1,7 @@
 name: Upload release to Thunderstore
 
-# Publishes the release zip asset to Thunderstore using the community action.
+# Publishes the release zip asset to Thunderstore with the official Thunderstore
+# CLI (github.com/thunderstore-io/thunderstore-cli), installed and run directly.
 # Setup (one-off):
 #   On GitHub, open Settings -> Secrets and variables -> Actions and create the
 #   variables THUNDERSTORE_NAMESPACE ('nickname') and THUNDERSTORE_COMMUNITY
@@ -86,16 +87,57 @@ jobs:
           ls -l dist
 
       - name: Publish to Thunderstore
-        # Fork of GreenTF/upload-thunderstore-package@v4.3 fixing two bugs:
-        # default categories for other communities (riskofrain2 leftover) and
-        # an empty repository when neither dev nor repo input is set.
-        uses: orax-Valheim-mods/upload-thunderstore-package@main
-        with:
-          token: ${{ secrets.THUNDERSTORE_API_TOKEN }}
-          namespace: ${{ vars.THUNDERSTORE_NAMESPACE }}
-          community: ${{ vars.THUNDERSTORE_COMMUNITY }}
-          name: AutoAttack
-          version: ${{ steps.meta.outputs.version }}
-          file: dist/${{ env.ASSET }}
-          # Category must be a slug of the community (list: thunderstore.io/api/experimental/community/valheim/category/)
-          categories: mods
+        # Publishes with the official Thunderstore CLI instead of a prebuilt action.
+        # The config is generated here on purpose: `tcli init` ships default category
+        # entries for other communities (e.g. riskofrain2) and the API validates every
+        # entry, so we write a minimal thunderstore.toml with our community only.
+        env:
+          TCLI_AUTH_TOKEN: ${{ secrets.THUNDERSTORE_API_TOKEN }}
+          NAMESPACE: ${{ vars.THUNDERSTORE_NAMESPACE }}
+          COMMUNITY: ${{ vars.THUNDERSTORE_COMMUNITY }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          # Category slugs of the community (list: thunderstore.io/api/experimental/community/<community>/category/)
+          CATEGORIES: "mods"
+        run: |
+          set -euo pipefail
+
+          # Install the Thunderstore CLI (releases are marked prerelease, so the asset URL is pinned).
+          TCLI_VERSION="0.2.4"
+          curl -fsSL -o /tmp/tcli.tar.gz \
+            "https://github.com/thunderstore-io/thunderstore-cli/releases/download/${TCLI_VERSION}/tcli-${TCLI_VERSION}-linux-x64.tar.gz"
+          tar -xzf /tmp/tcli.tar.gz -C /tmp
+          TCLI="/tmp/tcli-${TCLI_VERSION}-linux-x64/tcli"
+          chmod +x "$TCLI"
+
+          # Comma-separated slugs -> TOML list ("mods,maps" -> "mods", "maps")
+          toml_categories=""
+          IFS=',' read -ra CATS <<< "$CATEGORIES"
+          for c in "${CATS[@]}"; do
+            if [ -n "$toml_categories" ]; then
+              toml_categories+=", "
+            fi
+            toml_categories+="\"$c\""
+          done
+
+          # Minimal config: description, dependencies, icon... come from the zip's manifest.json.
+          cat > thunderstore.toml <<EOF
+          [config]
+          schemaVersion = "0.0.1"
+
+          [package]
+          namespace = "${NAMESPACE}"
+          name = "AutoAttack"
+          versionNumber = "${VERSION}"
+
+          [build]
+          outdir = "./build"
+
+          [publish]
+          repository = "https://thunderstore.io"
+          communities = ["${COMMUNITY}"]
+
+          [publish.categories]
+          ${COMMUNITY} = [${toml_categories}]
+          EOF
+
+          "$TCLI" publish --file "dist/${ASSET}"
