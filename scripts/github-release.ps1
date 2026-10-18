@@ -1,169 +1,177 @@
+<#
+.SYNOPSIS
+    Create (or update) a GitHub draft release for the current version.
+.DESCRIPTION
+    Reads the version from Package/manifest.json, verifies the build artifact
+    in .RELEASE, generates the release notes with git-cliff for the version
+    being released, then creates a DRAFT release (or re-uploads the zip if a
+    release already exists for that tag).
+
+    Invoked automatically by scripts\post-build.ps1 on every Release build.
+    Can also be run manually after a Release build:
+        .\scripts\github-release.ps1
+    The script commits the version bump files, tags the release, pushes to
+    origin, and creates a GitHub draft release.
+.NOTES
+    Exit code 1 on any problem so callers (or an optional Exec target) fail.
+#>
 param(
+    [Parameter(Mandatory)]
+    [System.String]$ProjectName,
+
     [Parameter(Mandatory)]
     [System.String]$ZipPath,
 
     [Parameter(Mandatory)]
-    [System.String]$ProjectPath,
+    [System.String]$VersionPath,
 
-    # Allow running with uncommitted changes (the released zip may not match the tagged commit).
-    [switch]$AllowDirty,
+    [Parameter(Mandatory)]
+    [System.String]$Branch,
 
-    # Run all checks and print the commands that would run, without pushing or creating anything.
-    [switch]$DryRun
+    [Parameter(Mandatory)]
+    [System.String[]]$ReleaseFiles,
+
+    [Parameter(Mandatory)]
+    [System.String[]]$ReleasePath
 )
 
-# Exit code 1 on any problem so the MSBuild Exec target fails the build.
+Set-StrictMode -Version Latest
+
+# Stop the script when a cmdlet or a native command fails.
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+
+# Exit code 1 on any problem so the caller fails.
 function Fail([string]$Message) {
-    Write-Host "GITHUB RELEASE FAILED: $Message" -ForegroundColor Red
-    exit 1
+    throw "GITHUB RELEASE FAILED: $Message"
 }
 
-# --- Preconditions: tooling -------------------------------------------------
-if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Fail "git not found in PATH" }
-if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-    Fail "GitHub CLI (gh) not found - install it first: winget install GitHub.cli"
-}
+# Validate the local release prerequisites and identify the GitHub repository.
+function Get-ReleaseContext() {
+    $version = Get-Content -Path $VersionPath -Raw
 
-gh auth status | Out-Null
-if ($LASTEXITCODE -ne 0) { Fail "gh is not authenticated - run: gh auth login" }
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Fail "git not found in PATH."
+    }
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        Fail "GitHub CLI (gh) not found - install it first: winget install GitHub.cli."
+    }
+    if (-not (Get-Command git-cliff -ErrorAction SilentlyContinue)) {
+        Fail "`git-cliff` not found in PATH - install: https://git-cliff.org/"
+    }
 
-# --- Preconditions: build artifact -----------------------------------------
-if (-not (Test-Path $ZipPath)) {
-    Fail "zip not found: $ZipPath (did the Release packaging in publish.ps1 run?)"
-}
-$zip = (Resolve-Path $ZipPath).Path
+    gh auth status | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "gh is not authenticated - run: `gh auth login`." }
+    if (-not (Test-Path $zipPath)) {
+        Fail "Zip not found: $zipPath (run a Release build first)."
+    }
 
-# --- Version: Package/manifest.json is the source of truth -----------------
-$manifestPath = Join-Path $ProjectPath "Package\manifest.json"
-if (-not (Test-Path $manifestPath)) { Fail "manifest not found: $manifestPath" }
-$manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
-$version = [string]$manifest.version_number
-if (-not $version) { Fail "version_number missing in $manifestPath" }
+    # Get the current git branch name.
+    $branch = (git rev-parse --abbrev-ref HEAD).Trim()
 
-# Cross-check the plugin version compiled into the assembly (warn only).
-$srcHit = Select-String -Path (Join-Path $ProjectPath "*.cs") -Pattern 'PluginVersion\s*=\s*"([^"]+)"' |
-    Select-Object -First 1
-if ($srcHit) {
-    $srcVersion = $srcHit.Matches[0].Groups[1].Value
-    if ($srcVersion -ne $version) {
-        Write-Host "WARNING: PluginVersion in source is '$srcVersion' but manifest says '$version'" -ForegroundColor Yellow
+    # Check if the current branch matches the expected branch.
+    if ($branch -ne $Branch) {
+        Fail "Not on a branch '$Branch'."
+    }
+
+    $repoUrl = git remote get-url origin
+    if ($LASTEXITCODE -ne 0 -or -not $repoUrl) { Fail "no 'origin' remote configured" }
+    if ($repoUrl -notmatch 'github\.com[:/]([^/]+)/([^/]+?)(\.git)?$') {
+        Fail "`origin` is not a GitHub remote: $repoUrl"
+    }
+    $repo = "$($Matches[1])/$($Matches[2])"
+
+    gh repo view $repo | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Fail "Repository $repo not found on GitHub (or no access with this gh account)."
+    }
+
+    $tag = "v$version"
+    gh release view $tag | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Fail "Release $tag already exists on GitHub."
+    }
+
+    return @{
+        Version = $version
+        Repository = $repo
+        Tag = $tag
     }
 }
 
-$tag = "v$version"
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+Push-Location $RepoRoot
 
-# --- Preconditions: git state ----------------------------------------------
-# Capture output and exit code separately: piping git directly into
-# Select-Object -First 1 kills it mid-run and poisons $LASTEXITCODE (-1).
-$branchOut = @(git rev-parse --abbrev-ref HEAD)
-$branchExit = $LASTEXITCODE
-$branch = $branchOut | Select-Object -First 1
-if ($branchExit -ne 0 -or -not $branch -or $branch -eq "HEAD") {
-    Fail "not on a branch (detached HEAD?) - checkout a branch first"
+$releaseContext = Get-ReleaseContext
+$version = $releaseContext.Version
+$repo = $releaseContext.Repository
+$tag = $releaseContext.Tag
+
+Set-Content -Path $VersionPath -Value $version -NoNewline
+
+$releaseNotesPath = Join-Path $ReleasePath "releaseNotes.md"
+git-cliff --bump --unreleased --output $releaseNotesPath | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Fail "git-cliff failed (exit $LASTEXITCODE)."
 }
 
-$dirty = git status --porcelain
-if ($dirty) {
-    if (-not $AllowDirty) {
-        git status --short
-        Fail "working tree is not clean - commit first (or pass -AllowDirty to release anyway)"
-    }
-    Write-Host "WARNING: working tree is dirty (-AllowDirty): the zip may not match commit $branch" -ForegroundColor Yellow
+Write-Host "Committing release preparation changes."
+
+# Add release files to staging area.
+git add $ReleaseFiles | Out-Null
+$staged = @(git diff --cached --name-only)
+if ($staged.Count -eq 0) {
+    Fail "Nothing to commit - working tree already clean."
 }
 
-$repoUrl = git remote get-url origin
-if ($LASTEXITCODE -ne 0 -or -not $repoUrl) { Fail "no 'origin' remote configured" }
-if ($repoUrl -notmatch 'github\.com[:/]([^/]+)/([^/]+?)(\.git)?$') {
-    Fail "origin is not a GitHub remote: $repoUrl"
-}
-$repo = "$($Matches[1])/$($Matches[2])"
-# Page opened in the browser: a draft has no usable tag URL before publishing,
-# while the releases list always shows it (drafts included).
-$listUrl = "https://github.com/$repo/releases"
-
-gh repo view $repo | Out-Null
-if ($LASTEXITCODE -ne 0) { Fail "repository $repo not found on GitHub (or no access with this gh account)" }
-
-# --- Does a release (or draft) already exist for this tag? ------------------
-# `gh release view` can miss drafts, and a jq expression containing quotes is
-# mangled by Windows PowerShell 5.1 native argument passing, so fetch the raw
-# JSON and filter in PowerShell instead. The list includes drafts for accounts
-# with push access; html_url works for drafts too (the /releases/tag/ URL
-# needs the tag to exist, i.e. a published release).
-function Find-Release([string]$TagName) {
-    $out = @(gh api "repos/$repo/releases" --paginate --slurp)
-    if ($LASTEXITCODE -ne 0) { Fail "failed to list releases of $repo (exit $LASTEXITCODE)" }
-    # Two flatten passes: ConvertFrom-Json may or may not unwrap the outer
-    # slurp array, so normalize down to individual release objects.
-    $pages = ($out -join "`n") | ConvertFrom-Json
-    $flat = @($pages | ForEach-Object { $_ } | ForEach-Object { $_ })
-    $found = @($flat | Where-Object { $_.tag_name -eq $TagName }) | Select-Object -First 1
-    return $found
+# Commit the release-preparation changes (version bump + changelog)
+# produced by prepare-release.ps1 so the tag points at the exact
+# commit that carries the new version.
+git commit -m "chore(release): bump version to v$version" | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Fail "git commit failed."
 }
 
-$existing = Find-Release $tag
-$releaseExists = [bool]$existing
-
-# --- Release notes -----------------------------------------------------------
-# gh's --generate-notes appends a "**Full Changelog**: <url>" line, which must
-# not appear in the release message: fetch GitHub's notes via the API, drop
-# that line and pass the result with --notes-file.
-function Get-ReleaseNotes([string]$TagName, [string]$Target) {
-    $out = @(gh api -X POST "repos/$repo/releases/generate-notes" -f "tag_name=$TagName" -f "target_commitish=$Target")
-    if ($LASTEXITCODE -ne 0) { Fail "failed to generate release notes (exit $LASTEXITCODE)" }
-    $gen = ($out -join "`n") | ConvertFrom-Json
-    $kept = @(([string]$gen.body) -split "`n" | Where-Object { $_ -notmatch '^(\*\*)?Full Changelog(\*\*)?:' })
-    return (@($kept) -join "`n").TrimEnd()
+# Push so the tag can be created from this commit when the draft publishes.
+Write-Host "Pushing $Branch to origin."
+git push origin $Branch
+if ($LASTEXITCODE -ne 0) {
+    Fail "`git push` failed - pull/rebase first, then rebuild."
 }
 
-# --- Commands (checked or executed) ----------------------------------------
-$pushArgs = @("push", "origin", $branch)
-$notesFile = $null
-if ($releaseExists) {
-    $ghArgs = @("release", "upload", $tag, $zip, "--clobber", "--repo", $repo)
-    $action = "update release $tag (re-upload zip)"
-}
-else {
-    # Generated here (and not only when executing) so the dry run exercises the API too.
-    $notes = Get-ReleaseNotes $tag $branch
-    $notesFile = Join-Path ([System.IO.Path]::GetTempPath()) "AutoAttack-release-notes.md"
-    [System.IO.File]::WriteAllText($notesFile, ($notes + "`r`n"), [System.Text.UTF8Encoding]::new($false))
-    $ghArgs = @("release", "create", $tag, $zip, "--title", $tag, "--notes-file", $notesFile, "--target", $branch, "--draft", "--repo", $repo)
-    $action = "create DRAFT $tag"
+# Tag the release commit before creating the draft so GitHub attaches it to a
+# real tag instead of an untagged-… ref.
+Write-Host "Tagging $tag at HEAD."
+git tag $tag
+if ($LASTEXITCODE -ne 0) {
+    Fail "`git tag $tag` failed."
 }
 
-if ($DryRun) {
-    Write-Host "[DRY RUN] version=$version branch=$branch repo=$repo action=$action" -ForegroundColor Cyan
-    Write-Host "[DRY RUN] git $($pushArgs -join ' ')" -ForegroundColor Cyan
-    Write-Host "[DRY RUN] gh $($ghArgs -join ' ')" -ForegroundColor Cyan
-    Write-Host "[DRY RUN] on creation: open $listUrl in the browser" -ForegroundColor Cyan
-    exit 0
+git push origin $tag
+if ($LASTEXITCODE -ne 0) {
+    Fail "`git push origin $tag` failed."
 }
 
-# --- Push so the tag can be created from this commit when the draft is published
-Write-Host "Pushing $branch to origin..."
-git push origin $branch
-if ($LASTEXITCODE -ne 0) { Fail "git push failed - pull/rebase first, then rebuild" }
-
-# --- Create the draft, or update the existing release ----------------------
-$created = -not $releaseExists
-if ($releaseExists) {
-    Write-Host "Release $tag already exists - re-uploading zip"
-}
-else {
-    Write-Host "Creating DRAFT release $tag on $repo"
-}
+# Create the draft.
+$ghArgs = @(
+    "release", "create", $tag, $zipPath,
+    "--title", $tag,
+    "--target", $Branch,
+    "--draft",
+    "--verify-tag",
+    "--repo", $repo,
+    "--notes-file", $releaseNotesPath
+)
+Write-Host "Creating DRAFT release $tag on $repo."
 & gh @ghArgs
-if ($LASTEXITCODE -ne 0) { Fail "gh release $($ghArgs[1]) failed (exit $LASTEXITCODE)" }
-if ($notesFile) { Remove-Item $notesFile -Force -ErrorAction SilentlyContinue }
+if ($LASTEXITCODE -ne 0) {
+    Fail "`gh release $($ghArgs[1])` failed (exit $LASTEXITCODE)."
+}
 
-# --- Open the releases page (a draft has no usable tag URL before publishing)
-if ($created) {
-    Write-Host "Draft created: $listUrl" -ForegroundColor Green
-    try { Start-Process $listUrl }
-    catch { Write-Host "WARNING: could not open the browser: $_" -ForegroundColor Yellow }
-}
-else {
-    Write-Host "Updated: $listUrl" -ForegroundColor Green
-}
-exit 0
+# Open the releases page (a draft has no usable tag URL before publishing).
+$listUrl = "https://github.com/$repo/releases"
+Write-Host "Draft created: $listUrl" -ForegroundColor Green
+Start-Process $listUrl
+Write-Host "Updated: $listUrl" -ForegroundColor Green
+
+Pop-Location
