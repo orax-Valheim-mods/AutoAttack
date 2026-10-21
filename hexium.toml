@@ -1,0 +1,21 @@
+[config]
+schemaVersion = "0.0.1"
+
+[general]
+# Documentation only: tcli 0.2.x never reads this key, it takes the URL from
+# [publish].repository below. publish-hexium.py accepts either spelling.
+repository = "https://hexium.gg"
+
+[package]
+# Namespace (team) the packages are published under; publish-hexium.py uses it as
+# author_name unless --team or HEXIUM_TEAM says otherwise.
+namespace = "orax"
+
+[publish]
+# tcli reads the store URL here - keeping it wrong would publish to thunderstore.io.
+repository = "https://hexium.gg"
+communities = ["valheim"]
+
+[publish.categories]
+# https://valheim.hexium.gg/api/experimental/community/valheim/category/
+valheim = ["Open Source", "Valheim 1.0"]

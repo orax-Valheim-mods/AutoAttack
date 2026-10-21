@@ -1,0 +1,8 @@
+# Keeps the external actions used by the callers (including the pinned
+# orax-modding/publish reusable workflow ref) up to date.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
