@@ -82,6 +82,7 @@ foreach ($item in $replacements) {
         throw "Pattern '$resolvedSearch' not found in $($item.file)."
     }
     $newContent = [regex]::Replace($content, $resolvedSearch, $resolvedReplacement)
+    $newContent = $newContent -replace "`r`n?", "`n"
 
     # Save the updated content back to the file (UTF-8 without BOM).
     [System.IO.File]::WriteAllText($item.file, $newContent, $utf8NoBom)
