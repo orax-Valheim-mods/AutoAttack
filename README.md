@@ -16,11 +16,15 @@ Client-side only: neither the server nor other players need the mod.
 - **Per-button configuration**: every input button the game registers gets its own on/off entry, split into keyboard and gamepad sections and generated from the game's own input registry at startup.
 - **Master switch** (`[General] Enabled`) to turn the mod fully off and get vanilla behavior.
 
+## Demo video
+
+[https://youtu.be/km7B-OptvUE](https://youtu.be/km7B-OptvUE)
+
 ## Installation
 
 ### Using a mod manager (recommended)
 
-Install via NexusMods r2modman, Gale or the Thunderstore Mod Manager. BepInExPack is installed automatically as a dependency.
+Install via NexusMods or Gale mod Manager. BepInExPack is installed automatically as a dependency.
 
 ### Manual
 
