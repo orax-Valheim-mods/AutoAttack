@@ -35,6 +35,10 @@
         <Reference Include="Microsoft.CSharp" />
         <Reference Include="System.Data" />
         <Reference Include="System.Xml" />
+    <!-- JotunnLib's props declare UnityEngine.ProfilerModule, which does not exist in this
+         game build (MSB3245). The mod never uses it: drop the reference to keep the build
+         clean. -->
+    <Reference Remove="UnityEngine.ProfilerModule" />
     </ItemGroup>
 
     <ItemGroup>
