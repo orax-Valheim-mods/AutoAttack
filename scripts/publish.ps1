@@ -99,12 +99,14 @@ if ($Target.Equals("Release")) {
     Copy-Item -Path $ReadmePath -Destination "$PackagePath\README.md" -Force
     Copy-Item -Path $ChangelogPath -Destination "$PackagePath\CHANGELOG.md" -Force
     New-Item -ItemType Directory -Path $ReleasePath -Force | Out-Null
-    # Compress-Archive writes backslash entry paths on Windows (e.g.
-    # "plugins\Foo.dll"), which the ZIP spec forbids and Hexium rejects as an
-    # unsafe ZIP entry path. ZipFile.CreateFromDirectory always uses "/".
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
+
     if (Test-Path $ZipPath) { Remove-Item $ZipPath -Force }
-    [System.IO.Compression.ZipFile]::CreateFromDirectory($PackagePath, $ZipPath)
+
+    # Create the zip archive using 7-Zip command-line tool.
+    # 'a' stands for add to archive, '-r' for recursive.
+    Write-Host "Creating archive using 7-Zip..."
+    & 7z a -tzip "$ZipPath" "$PackagePath\*"
+
     Write-Host "Archive written to $ZipPath"
 }
 
