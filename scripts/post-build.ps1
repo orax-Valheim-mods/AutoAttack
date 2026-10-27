@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Orchestrates the post-build automation for the AFK mod.
+    Orchestrates the post-build automation for the AutoAttack mod.
 .DESCRIPTION
     Invoked by MSBuild after the .NET build completes. On Release builds it runs
     prepare-release.ps1 to bump the version, then publish.ps1 to package and deploy
