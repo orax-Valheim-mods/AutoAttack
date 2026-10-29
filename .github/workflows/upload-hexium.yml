@@ -25,7 +25,7 @@ jobs:
       tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
       # Hexium namespace; empty = [package] namespace from hexium.toml.
       # team: ${{ vars.HEXIUM_TEAM }}
-      # asset: AutoAttack.zip        # optional; defaults to <repo-name>.zip
-      # config: hexium.toml   # optional; defaults to hexium.toml when present
+      # asset: <repo-name>.zip    # optional; defaults to <repo-name>.zip
+      # config: hexium.toml       # optional; defaults to hexium.toml when present
     secrets:
       HEXIUM_API_TOKEN: ${{ secrets.HEXIUM_API_TOKEN }}

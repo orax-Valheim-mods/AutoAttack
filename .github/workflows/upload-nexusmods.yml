@@ -26,6 +26,7 @@ jobs:
       tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
       mod_id: ${{ vars.NEXUSMODS_MOD_ID }}
       file_id: ${{ vars.NEXUSMODS_FILE_ID }}
-      # display_name: AutoAttack.zip  # optional; defaults to <repo-name>.zip
+      # display_name: <repo-name>.zip    # optional; defaults to <repo-name>.zip
+      # update_mod_version: false        # optional; default true
     secrets:
       NEXUSMODS_API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
