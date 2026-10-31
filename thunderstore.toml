@@ -1,0 +1,23 @@
+[config]
+schemaVersion = "0.0.1"
+
+[general]
+# Documentation only: tcli 0.2.x never reads this key, it takes the URL from
+# [publish].repository below. publish-hexium-thunderstore.py accepts either spelling.
+repository = "https://thunderstore.io"
+
+[package]
+# Namespace (author) the packages are published under; publish-hexium-thunderstore.py uses it as
+# author_name unless --team or THUNDERSTORE_TEAM says otherwise. Must be a namespace
+# the Thunderstore token may publish to (your username or one of your teams).
+namespace = "orax"
+
+[publish]
+# tcli reads the store URL here - publish-hexium-thunderstore.py takes it from --repository when the
+# workflow passes one, and from here for a manual run.
+repository = "https://thunderstore.io"
+communities = ["valheim"]
+
+[publish.categories]
+# https://thunderstore.io/api/experimental/community/valheim/category/
+valheim = []
