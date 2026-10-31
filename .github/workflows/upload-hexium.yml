@@ -2,7 +2,7 @@ name: Upload to Hexium.gg
 
 # Thin caller: every bit of logic lives in reusable-hexium-upload.yml (the
 # reusable workflow in orax-modding/publish), fetched at the pinned ref together
-# with publish-hexium.py. Nothing else to copy from that repo.
+# with publish-hexium-thunderstore.py. Nothing else to copy from that repo.
 # Template: orax-modding/publish README.md section 1.
 on:
   release:

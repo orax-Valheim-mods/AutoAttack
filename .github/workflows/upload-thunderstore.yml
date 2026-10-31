@@ -1,0 +1,50 @@
+name: Upload to Thunderstore.io
+
+# Thin caller: every bit of logic lives in reusable-thunderstore-upload.yml (the
+# reusable workflow in orax-modding/publish), fetched at the pinned ref together
+# with publish-hexium-thunderstore.py. Nothing else to copy from that repo; the project only
+# carries thunderstore.toml beside this file.
+# Template: orax-modding/publish README.md section 3.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.1.0)"
+        required: true
+        default: "v0.1.0"
+      asset:
+        description: "Zip to publish; empty = <repo-name>.zip"
+        type: string
+        default: ""
+      repository:
+        description: "Store base URL (e.g. https://thunderstore.dev for the test site)"
+        type: string
+        default: "https://thunderstore.io"
+      dry_run:
+        description: "Upload then abort instead of publishing (validates the token)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    uses: orax-modding/publish/.github/workflows/reusable-thunderstore-upload.yml@v0.1
+    with:
+      # workflow_dispatch input when run manually, release tag otherwise.
+      tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
+      asset: ${{ github.event_name == 'workflow_dispatch' && inputs.asset || '' }}
+      repository: ${{ github.event_name == 'workflow_dispatch' && inputs.repository || 'https://thunderstore.io' }}
+      # Nothing is published while the checkbox is ticked.
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+      # Thunderstore namespace; empty = [package] namespace from thunderstore.toml.
+      # team: ${{ vars.THUNDERSTORE_TEAM }}
+      # asset: <repo-name>.zip      # optional; defaults to <repo-name>.zip
+      # config: thunderstore.toml   # optional; that is the default
+      # communities: valheim        # optional; defaults to [publish] communities
+    secrets:
+      THUNDERSTORE_API_TOKEN: ${{ secrets.THUNDERSTORE_API_TOKEN }}
+      THUNDERSTORE_DEV_API_TOKEN: ${{ secrets.THUNDERSTORE_DEV_API_TOKEN }}
